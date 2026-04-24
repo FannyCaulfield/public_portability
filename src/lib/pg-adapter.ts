@@ -11,8 +11,10 @@ import { auth } from '@/app/auth'
 import logger from '@/lib/log_utils'
 import { pgUserRepository } from './repositories/auth/pg-user-repository'
 import { pgAccountRepository } from './repositories/auth/pg-account-repository'
+import { pgSocialAccountRepository } from './repositories/auth/pg-social-account-repository'
 import { pgMastodonInstanceRepository } from './repositories/auth/pg-mastodon-instance-repository'
 import type { DBUser } from './types/database'
+import { hydrateLegacyUserFromSocialAccounts, mapDbSocialAccount } from './types/social-account'
 
 export interface CustomAdapterUser extends Omit<AdapterUser, 'image'> {
   has_onboarded: boolean
@@ -42,6 +44,54 @@ export interface TwitterData extends Profile {
   }
 }
 
+function getMastodonInstance(profile: MastodonProfile): string {
+  return new URL(profile.url).origin
+}
+
+async function syncSocialAccountFromProfile(userId: string, provider: SocialProvider, profile: ProviderProfile, email?: string | null): Promise<void> {
+  if (provider === 'twitter') {
+    const twitterData = profile as TwitterData
+    await pgSocialAccountRepository.upsertSocialAccount({
+      user_id: userId,
+      provider: 'twitter',
+      provider_account_id: twitterData.data.id,
+      username: twitterData.data.username,
+      instance: '',
+      email: email ?? null,
+      is_primary: true,
+      last_seen_at: new Date(),
+    })
+    return
+  }
+
+  if (provider === 'mastodon') {
+    const mastodonData = profile as MastodonProfile
+    await pgSocialAccountRepository.upsertSocialAccount({
+      user_id: userId,
+      provider: 'mastodon',
+      provider_account_id: mastodonData.id,
+      username: mastodonData.username,
+      instance: getMastodonInstance(mastodonData),
+      email: email ?? null,
+      is_primary: true,
+      last_seen_at: new Date(),
+    })
+    return
+  }
+
+  const blueskyData = profile as BlueskyProfile
+  await pgSocialAccountRepository.upsertSocialAccount({
+    user_id: userId,
+    provider: 'bluesky',
+    provider_account_id: blueskyData.did || blueskyData.id || '',
+    username: blueskyData.handle || blueskyData.username || null,
+    instance: '',
+    email: email ?? null,
+    is_primary: true,
+    last_seen_at: new Date(),
+  })
+}
+
 export interface MastodonProfile extends Profile {
   id: string
   username: string
@@ -63,6 +113,8 @@ export interface BlueskyProfile extends Profile {
 
 export type ProviderProfile = TwitterData | MastodonProfile | BlueskyProfile
 
+type SocialProvider = 'twitter' | 'bluesky' | 'mastodon'
+
 export class UnlinkError extends Error {
   constructor(
     message: string,
@@ -77,7 +129,10 @@ export class UnlinkError extends Error {
 /**
  * Convertit un DBUser en CustomAdapterUser
  */
-function dbUserToAdapterUser(user: DBUser): CustomAdapterUser {
+async function dbUserToAdapterUser(user: DBUser): Promise<CustomAdapterUser> {
+  const socialAccounts = (await pgSocialAccountRepository.getSocialAccountsByUserId(user.id)).map(mapDbSocialAccount)
+  const hydratedUser = hydrateLegacyUserFromSocialAccounts(user, socialAccounts)
+
   return {
     id: user.id,
     name: user.name,
@@ -89,16 +144,16 @@ function dbUserToAdapterUser(user: DBUser): CustomAdapterUser {
     have_seen_newsletter: user.have_seen_newsletter,
     research_accepted: user.research_accepted,
     automatic_reconnect: user.automatic_reconnect,
-    twitter_id: user.twitter_id,
-    twitter_username: user.twitter_username,
-    twitter_image: user.twitter_image,
-    bluesky_id: user.bluesky_id,
-    bluesky_username: user.bluesky_username,
-    bluesky_image: user.bluesky_image,
-    mastodon_id: user.mastodon_id,
-    mastodon_username: user.mastodon_username,
-    mastodon_image: user.mastodon_image,
-    mastodon_instance: user.mastodon_instance
+    twitter_id: hydratedUser.twitter_id ?? null,
+    twitter_username: hydratedUser.twitter_username ?? null,
+    twitter_image: null,
+    bluesky_id: hydratedUser.bluesky_id ?? null,
+    bluesky_username: hydratedUser.bluesky_username ?? null,
+    bluesky_image: null,
+    mastodon_id: hydratedUser.mastodon_id ?? null,
+    mastodon_username: hydratedUser.mastodon_username ?? null,
+    mastodon_image: null,
+    mastodon_instance: hydratedUser.mastodon_instance ?? null
   }
 }
 
@@ -129,7 +184,7 @@ export async function createUser(
       
       // Parse instance for Mastodon
       try {
-        mastodonInstance = new URL(mastodonProfile.url).origin
+        mastodonInstance = getMastodonInstance(mastodonProfile)
       } catch (urlError) {
         logger.logError('Auth', 'createUser', 'Error parsing Mastodon URL', undefined, { 
           url: mastodonProfile.url, 
@@ -139,7 +194,7 @@ export async function createUser(
       }
     } else {
       // Bluesky case
-      providerId = (userData as any).bluesky_id || (userData as any).did || (userData as any).profile?.did
+      providerId = (userData as any).did || (userData as any).profile?.did
     }
 
     if (!providerId) {
@@ -151,15 +206,11 @@ export async function createUser(
       throw new Error(`Could not extract provider ID for ${provider}`)
     }
 
-    const existingUser = await pgUserRepository.getUserByProviderId(provider, providerId)
+    const existingUser = await pgUserRepository.getUserByProviderId(provider, providerId, mastodonInstance)
 
     // For Mastodon, check if the instance matches
     if (existingUser) {
-      if (provider === 'mastodon' && existingUser.mastodon_instance !== mastodonInstance) {
-        // Different instance, continue to create new user
-      } else {
-        return dbUserToAdapterUser(existingUser)
-      }
+      return dbUserToAdapterUser(existingUser)
     }
 
     // If the user is already authenticated and is linking Bluesky, attach Bluesky to the current user
@@ -172,13 +223,11 @@ export async function createUser(
           // Merge Bluesky data into the existing session user
           const blueskyData = (profile as BlueskyProfile) || (userData as any)
           const updates: Partial<DBUser> = {
-            bluesky_id: providerId,
-            bluesky_username: (blueskyData as any)?.handle || (blueskyData as any)?.username,
-            bluesky_image: (blueskyData as any)?.avatar,
             name: (blueskyData as any)?.displayName || (blueskyData as any)?.name || undefined
           }
 
           const mergedUser = await pgUserRepository.updateUser(currentUserId, updates)
+          await syncSocialAccountFromProfile(currentUserId, 'bluesky', blueskyData, mergedUser.email)
           return dbUserToAdapterUser(mergedUser)
         }
       } catch (sessionError) {
@@ -199,32 +248,17 @@ export async function createUser(
     // Extraction du nom selon le provider
     if (provider === 'twitter') {
       userToCreate.name = (profile as TwitterData).data.name
-      const twitterData = profile as TwitterData
-      Object.assign(userToCreate, {
-        twitter_id: twitterData.data.id,
-        twitter_username: twitterData.data.username,
-        twitter_image: twitterData.data.profile_image_url
-      })
     } else if (provider === 'mastodon') {
       userToCreate.name = (profile as MastodonProfile).display_name
-      const mastodonData = profile as MastodonProfile
-      Object.assign(userToCreate, {
-        mastodon_id: mastodonData.id,
-        mastodon_username: mastodonData.username,
-        mastodon_image: mastodonData.avatar,
-        mastodon_instance: mastodonInstance
-      })
     } else if (provider === 'bluesky') {
       const blueskyData = profile as BlueskyProfile
       userToCreate.name = blueskyData.displayName || blueskyData.name
-      Object.assign(userToCreate, {
-        bluesky_id: blueskyData.did || blueskyData.id,
-        bluesky_username: blueskyData.handle || blueskyData.username,
-        bluesky_image: blueskyData.avatar
-      })
     }
 
     const newUser = await pgUserRepository.createUser(userToCreate)
+    if (profile) {
+      await syncSocialAccountFromProfile(newUser.id, provider, profile, newUser.email)
+    }
     return dbUserToAdapterUser(newUser)
   }
 
@@ -247,7 +281,7 @@ export async function createUser(
 export async function getUser(id: string): Promise<CustomAdapterUser | null> {
   const user = await pgUserRepository.getUser(id)
   if (!user) return null
-  return dbUserToAdapterUser(user)
+  return await dbUserToAdapterUser(user)
 }
 
 export async function getUserByEmail(email: string): Promise<CustomAdapterUser | null> {
@@ -265,7 +299,7 @@ export async function getUserByAccount(
 
   const user = await pgUserRepository.getUserByProviderId(provider, providerAccountId)
   if (!user) return null
-  return dbUserToAdapterUser(user)
+  return await dbUserToAdapterUser(user)
 }
 
 export async function updateUser(user: Partial<AdapterUser> & Pick<AdapterUser, "id">): Promise<CustomAdapterUser>
@@ -295,30 +329,25 @@ export async function updateUser(
   if (providerData?.provider === 'twitter' && providerData.profile && 'data' in providerData.profile) {
     const twitterData = providerData.profile as TwitterData
     if (twitterData.data) {
-      updates.twitter_id = twitterData.data.id
-      updates.twitter_username = twitterData.data.username
-      updates.twitter_image = twitterData.data.profile_image_url
       updates.name = twitterData.data.name
     }
   }
   else if (providerData?.provider === 'mastodon' && providerData.profile) {
     const mastodonData = providerData.profile as MastodonProfile
-    updates.mastodon_id = mastodonData.id
-    updates.mastodon_username = mastodonData.username
-    updates.mastodon_image = mastodonData.avatar
-    updates.mastodon_instance = new URL(mastodonData.url).origin
     updates.name = mastodonData.display_name || mastodonData.username
   }
   else if (providerData?.provider === 'bluesky' && providerData.profile) {
     const blueskyData = providerData.profile as BlueskyProfile
-    updates.bluesky_id = blueskyData.did || blueskyData.id
-    updates.bluesky_username = blueskyData.handle || blueskyData.username
-    updates.bluesky_image = blueskyData.avatar
     updates.name = blueskyData.displayName || blueskyData.name
   }
 
   const updatedUser = await pgUserRepository.updateUser(userId, updates)
-  return dbUserToAdapterUser(updatedUser)
+
+  if (providerData?.provider && providerData.profile) {
+    await syncSocialAccountFromProfile(userId, providerData.provider, providerData.profile, updatedUser.email)
+  }
+
+  return await dbUserToAdapterUser(updatedUser)
 }
 
 // Fonction utilitaire pour décoder les JWT
@@ -359,6 +388,45 @@ export async function linkAccount(account: AdapterAccount): Promise<void> {
     id_token: account.id_token ? encrypt(account.id_token) : null,
     session_state: account.session_state == null ? null : String(account.session_state),
   })
+
+  const provider = account.provider === 'piaille' ? 'mastodon' : account.provider
+  if (provider !== 'twitter' && provider !== 'bluesky' && provider !== 'mastodon') {
+    return
+  }
+
+  const user = await pgUserRepository.getUser(account.userId)
+  const existingSocialAccounts = await pgSocialAccountRepository.getSocialAccountsByUserId(account.userId)
+  const existingSocialAccount = existingSocialAccounts.find((socialAccount) => {
+    if (socialAccount.provider !== provider) {
+      return false
+    }
+
+    if (provider === 'mastodon') {
+      return socialAccount.provider_account_id === account.providerAccountId
+    }
+
+    return true
+  })
+
+  const username = existingSocialAccount?.username ?? null
+  const instance = provider === 'mastodon'
+    ? (existingSocialAccount?.instance ?? '')
+    : ''
+
+  if (provider === 'mastodon' && !instance) {
+    return
+  }
+
+  await pgSocialAccountRepository.upsertSocialAccount({
+    user_id: account.userId,
+    provider,
+    provider_account_id: account.providerAccountId,
+    username,
+    instance,
+    email: existingSocialAccount?.email ?? user?.email ?? null,
+    is_primary: true,
+    last_seen_at: new Date(),
+  })
 }
 
 export async function createSession(session: {
@@ -392,45 +460,49 @@ export async function deleteSession(sessionToken: string): Promise<void> {
 
 export async function getAccountsByUserId(userId: string): Promise<AdapterAccount[]> {
   const accounts: AdapterAccount[] = []
-  const user = await getUser(userId)
+  const socialAccounts = await pgSocialAccountRepository.getSocialAccountsByUserId(userId)
 
+  const user = await pgUserRepository.getUser(userId)
   if (!user) {
     logger.logError('Auth', 'getAccountsByUserId', 'User not found', userId)
     return accounts
   }
 
-  if (user.twitter_id) {
+  const twitterAccount = socialAccounts.find((account) => account.provider === 'twitter')
+  if (twitterAccount?.provider_account_id) {
     accounts.push({
       provider: 'twitter',
       type: 'oauth',
-      providerAccountId: user.twitter_id,
+      providerAccountId: twitterAccount.provider_account_id,
       userId: user.id
     })
   }
 
-  if (user.bluesky_id) {
+  const blueskyAccount = socialAccounts.find((account) => account.provider === 'bluesky')
+  if (blueskyAccount?.provider_account_id) {
     accounts.push({
       provider: 'bluesky',
       type: 'oauth',
-      providerAccountId: user.bluesky_id,
+      providerAccountId: blueskyAccount.provider_account_id,
       userId: user.id
     })
   }
 
-  if (user.mastodon_id) {
+  const mastodonAccount = socialAccounts.find((account) => account.provider === 'mastodon')
+  if (mastodonAccount?.provider_account_id) {
     accounts.push({
       provider: 'mastodon',
       type: 'oauth',
-      providerAccountId: user.mastodon_id,
+      providerAccountId: mastodonAccount.provider_account_id,
       userId: user.id
     })
 
     // If it's a piaille.fr account, add it as a separate provider
-    if (user.mastodon_instance === 'piaille.fr') {
+    if (mastodonAccount.instance === 'piaille.fr') {
       accounts.push({
         provider: 'piaille',
         type: 'oauth',
-        providerAccountId: user.mastodon_id,
+        providerAccountId: mastodonAccount.provider_account_id,
         userId: user.id
       })
     }
@@ -444,30 +516,33 @@ async function unlinkAccountImpl(
   provider: 'twitter' | 'bluesky' | 'mastodon' | 'piaille'
 ): Promise<void> {
 
-  const user = await pgUserRepository.getUser(userId)
-
-  if (!user) {
-    logger.logError('Auth', 'unlinkAccountImpl', 'Error fetching user', userId, { provider })
-    throw new UnlinkError("User not found", "NOT_FOUND", 404)
-  }
+  const socialAccounts = await pgSocialAccountRepository.getSocialAccountsByUserId(userId)
 
   // For Piaille, we check mastodon_id
   const dbProvider = provider === 'piaille' ? 'mastodon' : provider
-  const providerIdField = `${dbProvider}_id` as keyof DBUser
-  if (!user[providerIdField]) {
+  const matchingSocialAccount = socialAccounts.find((account) => {
+    if (dbProvider !== account.provider) {
+      return false
+    }
+
+    if (provider === 'piaille') {
+      return account.instance === 'piaille.fr'
+    }
+
+    return true
+  })
+
+  if (!matchingSocialAccount?.provider_account_id) {
     throw new UnlinkError("Account not linked", "NOT_LINKED", 400)
   }
 
   // For Piaille, verify the instance
-  if (provider === 'piaille' && user.mastodon_instance !== 'piaille.fr') {
+  if (provider === 'piaille' && matchingSocialAccount.instance !== 'piaille.fr') {
     throw new UnlinkError("Account not linked", "NOT_LINKED", 400)
   }
 
   // Count linked accounts
-  let linkedAccounts = 0
-  if (user.twitter_id) linkedAccounts++
-  if (user.bluesky_id) linkedAccounts++
-  if (user.mastodon_id) linkedAccounts++
+  const linkedAccounts = socialAccounts.length
 
   // Prevent unlinking the last account
   if (linkedAccounts === 1) {
@@ -480,20 +555,8 @@ async function unlinkAccountImpl(
   }
 
   // Delete account entry
-  await pgAccountRepository.deleteAccount(provider, user[providerIdField] as string)
-
-  // Update user fields
-  const updates: Partial<DBUser> = {
-    [`${dbProvider}_id`]: null,
-    [`${dbProvider}_username`]: null,
-    [`${dbProvider}_image`]: null
-  } as any
-
-  if (dbProvider === 'mastodon') {
-    updates.mastodon_instance = null
-  }
-
-  await pgUserRepository.updateUser(userId, updates)
+  await pgAccountRepository.deleteAccount(provider, matchingSocialAccount.provider_account_id)
+  await pgSocialAccountRepository.deleteSocialAccount(userId, dbProvider, matchingSocialAccount.provider_account_id, matchingSocialAccount.instance)
 }
 
 export async function unlinkAccount(

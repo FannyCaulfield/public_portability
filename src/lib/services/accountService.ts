@@ -1,6 +1,6 @@
 import { BskyAgent } from '@atproto/api';
 import { pgAccountRepository } from '../repositories/auth/pg-account-repository';
-import { pgUserRepository } from '../repositories/auth/pg-user-repository';
+import { pgSocialAccountRepository } from '../repositories/auth/pg-social-account-repository';
 import { pgMastodonInstanceRepository } from '../repositories/auth/pg-mastodon-instance-repository';
 import { Provider, RefreshResult, TokenData, TokenUpdate } from '../types/account';
 // import { supabaseAdapter } from '../supabase-adapter';
@@ -109,13 +109,15 @@ export class AccountService {
     }
 
 
-    const user = await pgUserRepository.getUser(userId);
-    if (!user?.mastodon_instance) {
+    const socialAccounts = await pgSocialAccountRepository.getSocialAccountsByUserId(userId);
+    const mastodonInstance = socialAccounts.find((account) => account.provider === 'mastodon')?.instance || null;
+
+    if (!mastodonInstance) {
       console.warn(' [AccountService.verifyAndRefreshMastodonToken] No Mastodon instance found for user:', userId);
       return { success: false, error: 'No Mastodon instance found', requiresReauth: true };
     }
     try {
-      const response = await fetch(`${user.mastodon_instance}/api/v1/accounts/verify_credentials`, {
+      const response = await fetch(`${mastodonInstance}/api/v1/accounts/verify_credentials`, {
         headers: {
           'Authorization': `Bearer ${account.access_token}`
         }

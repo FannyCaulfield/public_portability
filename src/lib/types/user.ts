@@ -1,3 +1,5 @@
+import type { SocialAccount } from './social-account'
+
 // Type de base pour un utilisateur
 export interface User {
     id: string;
@@ -25,6 +27,10 @@ export interface User {
     have_seen_newsletter: boolean;
     have_seen_v2: boolean;
     personalized_support: boolean;
+}
+
+export interface UserWithSocialAccounts extends User {
+    social_accounts: SocialAccount[];
 }
 
 // Type pour les mises à jour utilisateur

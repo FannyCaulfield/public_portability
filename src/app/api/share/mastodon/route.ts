@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { withValidation } from "@/lib/validation/middleware";
 import { AccountService } from "@/lib/services/accountService";
-import { pgUserRepository } from "@/lib/repositories/auth/pg-user-repository";
+import { pgSocialAccountRepository } from "@/lib/repositories/auth/pg-social-account-repository";
 import logger from '@/lib/log_utils';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -42,8 +42,9 @@ async function mastodonShareHandler(req: Request, data: MastodonShareRequest, se
     }
 
     // Récupérer l'instance Mastodon de l'utilisateur
-    const user = await pgUserRepository.getUser(session.user.id);
-    if (!user?.mastodon_instance) {
+    const socialAccounts = await pgSocialAccountRepository.getSocialAccountsByUserId(session.user.id);
+    const mastodonInstance = socialAccounts.find((socialAccount) => socialAccount.provider === 'mastodon')?.instance;
+    if (!mastodonInstance) {
       logger.logWarning('API', 'POST /api/share/mastodon', 'No Mastodon instance found', session.user.id);
       return NextResponse.json(
         { success: false, error: 'No Mastodon instance configured' },
@@ -51,7 +52,6 @@ async function mastodonShareHandler(req: Request, data: MastodonShareRequest, se
       );
     }
 
-    const mastodonInstance = user.mastodon_instance;
     // Token is already decrypted by pgAccountRepository.getProviderAccount()
     const accessToken = account.access_token;
 

@@ -11,8 +11,41 @@ import type { CustomAdapterUser } from '@/lib/pg-adapter'
 import logger from '@/lib/log_utils'
 import type { Session } from "next-auth"
 import type { JWT } from "next-auth/jwt"
+import { queryJobs } from '@/lib/database'
+import { pgSocialAccountRepository } from '@/lib/repositories/auth/pg-social-account-repository'
+import { hydrateLegacyUserFromSocialAccounts, mapDbSocialAccount, mapSocialAccountToSessionSocialAccount } from '@/lib/types/social-account'
 
 import { auth } from "./auth"
+
+type NetworkProvider = 'bluesky' | 'mastodon'
+
+async function enqueueNetworkSyncJobBestEffort(userId: string, provider: NetworkProvider): Promise<void> {
+  const dedupeKey = `auth_signin:${userId}:${provider}:full_sync`
+
+  try {
+    await queryJobs(
+      `INSERT INTO jobs.network_sync_jobs (user_id, provider, scope, dedupe_key, status, triggered_by)
+       VALUES ($1::uuid, $2::text, 'full_sync', $3::text, 'pending', 'auth_signin')
+       ON CONFLICT (dedupe_key)
+       WHERE status IN ('pending', 'running', 'retrying')
+       DO NOTHING`,
+      [userId, provider, dedupeKey]
+    )
+
+    logger.logInfo('Auth', 'signIn.enqueueNetworkSyncJob', 'Job enqueued (or already in-flight)', userId, {
+      provider,
+      scope: 'full_sync',
+      dedupeKey,
+    })
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error)
+    logger.logError('Auth', 'signIn.enqueueNetworkSyncJob', err, userId, {
+      provider,
+      scope: 'full_sync',
+      dedupeKey,
+    })
+  }
+}
 
 export const authConfig = {
   adapter: pgAdapter,
@@ -86,16 +119,16 @@ export const authConfig = {
 
           // Vérifier si un autre utilisateur a déjà ce compte Mastodon
           const { pgUserRepository } = await import('@/lib/repositories/auth/pg-user-repository');
-          const existingUser = await pgUserRepository.getUserByProviderId('mastodon', mastodonProfile.id);
+          const existingUser = await pgUserRepository.getUserByProviderId('mastodon', mastodonProfile.id, instance);
 
-            if (existingUser && existingUser.mastodon_instance === instance && existingUser.id !== session.user.id) {
-              logger.logError('Auth', 'signIn', 'This Mastodon account is already linked to another user', session.user.id, {
-                existingUserId: existingUser.id,
-                mastodonId: mastodonProfile.id,
-                instance
-              });
-              return '/auth/error?error=MastodonAccountAlreadyLinked';
-            }
+          if (existingUser && existingUser.id !== session.user.id) {
+            logger.logError('Auth', 'signIn', 'This Mastodon account is already linked to another user', session.user.id, {
+              existingUserId: existingUser.id,
+              mastodonId: mastodonProfile.id,
+              instance
+            });
+            return '/auth/error?error=MastodonAccountAlreadyLinked';
+          }
         }
         
         // Si on essaie de lier un compte Bluesky
@@ -133,8 +166,13 @@ export const authConfig = {
               session_state: account.session_state
             });
             logger.logInfo('Auth', 'signIn', 'Successfully linked Bluesky account', session.user.id);
+          } else if (account.type === 'credentials') {
+            logger.logDebug('Auth', 'signIn', 'Skip Bluesky adapter link during credentials finalization; callback route already persisted account state', session.user.id, {
+              providerAccountId: account.providerAccountId,
+              accountType: account.type
+            });
           } else {
-            logger.logError('Auth', 'signIn', 'Skip linking Bluesky account (not credentials but invalid providerAccountId)', session.user.id, {
+            logger.logError('Auth', 'signIn', 'Skip linking Bluesky account (invalid providerAccountId for oauth flow)', session.user.id, {
               providerAccountId: account.providerAccountId,
               accountType: account.type
             });
@@ -153,6 +191,13 @@ export const authConfig = {
             });
             return '/auth/error?error=TwitterAccountAlreadyLinked';
           }
+        }
+
+        const targetUserId = session?.user?.id || (typeof user?.id === 'string' ? user.id : undefined)
+
+        if (targetUserId && (account.provider === 'bluesky' || account.provider === 'mastodon')) {
+          // Best-effort enqueue: never block sign-in on job queueing failure.
+          void enqueueNetworkSyncJobBestEffort(targetUserId, account.provider)
         }
 
         return true;
@@ -229,6 +274,10 @@ export const authConfig = {
           const user = await pgAdapter.getUser(token.id)
           
           if (user) {
+            const socialAccounts = (await pgSocialAccountRepository.getSocialAccountsByUserId(token.id)).map(mapDbSocialAccount)
+            const sessionSocialAccounts = socialAccounts.map(mapSocialAccountToSessionSocialAccount)
+            const hydratedUser = hydrateLegacyUserFromSocialAccounts(user as any, socialAccounts)
+
             session.user = {
               ...session.user,
               id: token.id,
@@ -238,23 +287,24 @@ export const authConfig = {
               research_accepted: !!user.research_accepted,
               have_seen_newsletter: !!user.have_seen_newsletter,
               automatic_reconnect: !!user.automatic_reconnect,
-              name: token.name || user.name,
+              name: token.name || hydratedUser.name,
               
               // For Twitter and Bluesky, use token values first
               // CORRIGÉ: Toujours utiliser la valeur DB pour twitter_id (plus fiable)
-              twitter_id: user.twitter_id || undefined,
-              twitter_username: token.twitter_username || user.twitter_username || undefined,
-              twitter_image: token.twitter_image || user.twitter_image || undefined,
+              twitter_id: hydratedUser.twitter_id || undefined,
+              twitter_username: token.twitter_username || hydratedUser.twitter_username || undefined,
+              twitter_image: token.twitter_image || hydratedUser.twitter_image || undefined,
               
               // For Mastodon/Piaille, ALWAYS use database values
-              mastodon_id: user.mastodon_id || undefined,
-              mastodon_username: user.mastodon_username || undefined,
-              mastodon_image: user.mastodon_image || undefined,
-              mastodon_instance: user.mastodon_instance || undefined,
+              mastodon_id: hydratedUser.mastodon_id || undefined,
+              mastodon_username: hydratedUser.mastodon_username || undefined,
+              mastodon_image: hydratedUser.mastodon_image || undefined,
+              mastodon_instance: hydratedUser.mastodon_instance || undefined,
               
-              bluesky_id: token.bluesky_id || user.bluesky_id || undefined,
-              bluesky_username: token.bluesky_username || user.bluesky_username || undefined,
-              bluesky_image: token.bluesky_image || user.bluesky_image || undefined,
+              bluesky_id: token.bluesky_id || hydratedUser.bluesky_id || undefined,
+              bluesky_username: token.bluesky_username || hydratedUser.bluesky_username || undefined,
+              bluesky_image: token.bluesky_image || hydratedUser.bluesky_image || undefined,
+              social_accounts: sessionSocialAccounts,
             }
           }
         } catch (error) {
@@ -266,7 +316,7 @@ export const authConfig = {
     },
     async redirect({ url, baseUrl }: { url: string, baseUrl: string }) {
       
-      logger.logInfo('Auth', 'redirect', 'Handling redirect after sign in', undefined, { url, baseUrl });
+      logger.logDebug('Auth', 'redirect', 'Handling redirect after sign in', undefined, { url, baseUrl });
       
       return url.startsWith(baseUrl) 
         ? url

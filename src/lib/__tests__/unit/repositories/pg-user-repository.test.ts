@@ -1,11 +1,50 @@
 import { describe, it, expect } from 'vitest'
 import { pgUserRepository } from '../../../repositories/auth/pg-user-repository'
+import { pgSocialAccountRepository } from '../../../repositories/auth/pg-social-account-repository'
 import {
   mockTwitterUser,
   mockMastodonUser,
   mockBlueskyUser,
   mockOnboardedUser,
 } from '../../fixtures/user-fixtures'
+
+async function seedSocialAccountForUser(userId: string, providerUser: typeof mockTwitterUser | typeof mockMastodonUser | typeof mockBlueskyUser, provider: 'twitter' | 'mastodon' | 'bluesky') {
+  if (provider === 'twitter') {
+    await pgSocialAccountRepository.upsertSocialAccount({
+      user_id: userId,
+      provider: 'twitter',
+      provider_account_id: providerUser.twitter_id!,
+      username: providerUser.twitter_username ?? null,
+      instance: '',
+      email: providerUser.email ?? null,
+      is_primary: true,
+    })
+    return
+  }
+
+  if (provider === 'bluesky') {
+    await pgSocialAccountRepository.upsertSocialAccount({
+      user_id: userId,
+      provider: 'bluesky',
+      provider_account_id: providerUser.bluesky_id!,
+      username: providerUser.bluesky_username ?? null,
+      instance: '',
+      email: providerUser.email ?? null,
+      is_primary: true,
+    })
+    return
+  }
+
+  await pgSocialAccountRepository.upsertSocialAccount({
+    user_id: userId,
+    provider: 'mastodon',
+    provider_account_id: providerUser.mastodon_id!,
+    username: providerUser.mastodon_username ?? null,
+    instance: providerUser.mastodon_instance ?? '',
+    email: providerUser.email ?? null,
+    is_primary: true,
+  })
+}
 
 describe('PgUserRepository', () => {
   describe('createUser & getUser', () => {
@@ -67,6 +106,7 @@ describe('PgUserRepository', () => {
   describe('getUserByProviderId', () => {
     it('should retrieve user by Twitter ID', async () => {
       const created = await pgUserRepository.createUser(mockTwitterUser)
+      await seedSocialAccountForUser(created.id, mockTwitterUser, 'twitter')
       
       const retrieved = await pgUserRepository.getUserByProviderId('twitter', mockTwitterUser.twitter_id!)
       expect(retrieved?.id).toBe(created.id)
@@ -75,14 +115,16 @@ describe('PgUserRepository', () => {
 
     it('should retrieve user by Mastodon ID', async () => {
       const created = await pgUserRepository.createUser(mockMastodonUser)
+      await seedSocialAccountForUser(created.id, mockMastodonUser, 'mastodon')
       
-      const retrieved = await pgUserRepository.getUserByProviderId('mastodon', mockMastodonUser.mastodon_id!)
+      const retrieved = await pgUserRepository.getUserByProviderId('mastodon', mockMastodonUser.mastodon_id!, mockMastodonUser.mastodon_instance!)
       expect(retrieved?.id).toBe(created.id)
       expect(retrieved?.mastodon_id).toBe(mockMastodonUser.mastodon_id)
     })
 
     it('should retrieve user by Bluesky ID', async () => {
       const created = await pgUserRepository.createUser(mockBlueskyUser)
+      await seedSocialAccountForUser(created.id, mockBlueskyUser, 'bluesky')
       
       const retrieved = await pgUserRepository.getUserByProviderId('bluesky', mockBlueskyUser.bluesky_id!)
       expect(retrieved?.id).toBe(created.id)
@@ -90,7 +132,7 @@ describe('PgUserRepository', () => {
     })
 
     it('should return null when provider ID not found', async () => {
-      const result = await pgUserRepository.getUserByProviderId('mastodon', 'nonexistent123')
+      const result = await pgUserRepository.getUserByProviderId('mastodon', 'nonexistent123', 'https://mastodon.social')
       expect(result).toBeNull()
     })
   })

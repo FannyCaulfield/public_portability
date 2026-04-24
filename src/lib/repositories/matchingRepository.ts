@@ -1,5 +1,5 @@
 import { MatchingTarget, StoredProcedureTarget } from '../types/matching'
-import { pgMatchingRepository } from './public/pg-matching-repository'
+import { pgMatchingRepository } from './network/pg-matching-repository'
 
 /**
  * @deprecated Use pgMatchingRepository from public schema instead

@@ -83,7 +83,7 @@ describe('User stats cache invalidation (pg_notify → Node listener → Redis)'
     await stopPgNotifyListener();
 
     try {
-      await pg.query('DELETE FROM public.user_stats_cache WHERE user_id = $1', [testUserId]);
+      await pg.query('DELETE FROM cache.user_stats_cache WHERE user_id = $1', [testUserId]);
       await pg.query('DELETE FROM "next-auth".users WHERE id = $1', [testUserId]);
     } catch {
       // ignore
@@ -105,7 +105,7 @@ describe('User stats cache invalidation (pg_notify → Node listener → Redis)'
     };
 
     await pg.query(
-      `INSERT INTO public.user_stats_cache (user_id, stats)
+      `INSERT INTO cache.user_stats_cache (user_id, stats)
        VALUES ($1, $2::jsonb)
        ON CONFLICT (user_id) DO UPDATE SET stats = EXCLUDED.stats, updated_at = now()`,
       [testUserId, JSON.stringify(stats1)]
@@ -128,7 +128,7 @@ describe('User stats cache invalidation (pg_notify → Node listener → Redis)'
     };
 
     await pg.query(
-      `UPDATE public.user_stats_cache
+      `UPDATE cache.user_stats_cache
        SET stats = $2::jsonb, updated_at = now()
        WHERE user_id = $1`,
       [testUserId, JSON.stringify(stats2)]
@@ -158,11 +158,11 @@ describe('User stats cache invalidation (pg_notify → Node listener → Redis)'
     expect(result.rows[0].prosrc).toContain('user_stats_cache_invalidation');
   });
 
-  it('should verify triggers exist on public.user_stats_cache', async () => {
+  it('should verify triggers exist on cache.user_stats_cache', async () => {
     const result = await pg.query(`
       SELECT tgname
       FROM pg_trigger
-      WHERE tgrelid = 'public.user_stats_cache'::regclass
+      WHERE tgrelid = 'cache.user_stats_cache'::regclass
         AND tgname IN ('trg_notify_user_stats_cache_change_ins', 'trg_notify_user_stats_cache_change_upd')
     `);
 

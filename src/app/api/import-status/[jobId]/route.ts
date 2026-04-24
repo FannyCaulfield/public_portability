@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { pgImportJobsRepository } from '@/lib/repositories/public/pg-import-jobs-repository'
+import { pgImportJobsRepository } from '@/lib/repositories/jobs/pg-import-jobs-repository'
 import logger from '@/lib/log_utils';
 import { withValidation } from "@/lib/validation/middleware"
 import { z } from "zod"

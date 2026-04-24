@@ -26,6 +26,7 @@ import { IntroOverlay } from './IntroOverlay';
 import { ConsentLabelModal } from './ConsentLabelModal';
 import { Lock, X } from 'lucide-react';
 import { getInitialViewMode, setGraphViewMode, clearGraphUiState, getGraphUiState } from '@/lib/utils/graphCookies';
+import { hasConnectedProvider } from '@/lib/utils/connected-accounts';
 
 // Dynamic import to avoid SSR issues with embedding-atlas WASM
 const ReconnectGraphVisualization = dynamic(
@@ -140,7 +141,7 @@ export function ReconnectGraphDashboard({
   }, [session?.user?.id]);
   // View mode: 'discover' = Mosaic (DuckDB), 'followings' = following network, 'followers' = followers network
   const hasOnboarded = session?.user?.has_onboarded ?? false;
-  const hasTwitterUsername = !!session?.user?.twitter_username;
+  const hasTwitterAccount = hasConnectedProvider(session?.user, 'twitter');
   
   // Use GraphDataContext for personal data (matching + hashes) and tile-based loading
   const graphData = useGraphData();
@@ -464,11 +465,11 @@ export function ReconnectGraphDashboard({
   // Show login modal when auth check fails (but only once)
   // Don't show modal if user has twitter identity - they can still see their network
   useEffect(() => {
-    const hasTwitterIdentityForModal = hasTwitterUsername || !!session?.user?.twitter_id;
+    const hasTwitterIdentityForModal = hasTwitterAccount;
     if (!isCheckingAuth && requiresReauth && !hasUserDismissedModal && !hasTwitterIdentityForModal) {
       setShowLoginModal(true);
     }
-  }, [isCheckingAuth, requiresReauth, hasUserDismissedModal, hasTwitterUsername, session?.user?.twitter_id]);
+  }, [isCheckingAuth, requiresReauth, hasUserDismissedModal, hasTwitterAccount]);
 
   // Show login modal when token validation fails during migration (from useReconnectState)
   useEffect(() => {
@@ -503,7 +504,7 @@ export function ReconnectGraphDashboard({
   // Personal views should NEVER be blocked if user has twitter_id (can fetch hashes)
   // The requiresReauth check was causing issues - we only block if user truly can't access their network
   // Having twitter_id OR twitter_username means we can show their network
-  const hasTwitterIdentity = hasTwitterUsername || !!session?.user?.twitter_id;
+  const hasTwitterIdentity = hasTwitterAccount;
   const isPersonalViewBlocked = !hasTwitterIdentity && !hasOnboarded;
   
   // Debug log for personal view blocking
@@ -961,16 +962,16 @@ export function ReconnectGraphDashboard({
   // Compute followerNodesFromHashes from baseNodes filtered by followerHashes (from context)
   // This allows FloatingFollowersCommunityPanel to display community breakdown
   const followerNodesFromHashes = useMemo(() => {
-    if (graphData.followerHashes.size === 0 || baseNodes.length === 0) return [];
+    if (graphData.followerHashes.size === 0 || displayNodes.length === 0) return [];
     
     // Helper to create coordinate hash (same format as used in visualization)
     const coordHash = (x: number, y: number): string => `${x.toFixed(6)}_${y.toFixed(6)}`;
     
-    return baseNodes.filter((node: GraphNode) => {
+    return displayNodes.filter((node: GraphNode) => {
       const hash = coordHash(node.x, node.y);
       return graphData.followerHashes.has(hash);
     });
-  }, [baseNodes, graphData.followerHashes]);
+  }, [displayNodes, graphData.followerHashes]);
 
   // Header height ~40px, Footer height varies by screen size
   // Mobile: ~40px (compact footer), Desktop: ~84px (full footer + EmbeddingAtlas status bar)

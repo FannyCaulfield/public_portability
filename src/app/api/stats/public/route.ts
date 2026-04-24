@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { StatsService } from '@/lib/services/statsServices'
-import { pgStatsRepository } from '@/lib/repositories/public/pg-stats-repository'
+import { pgStatsRepository } from '@/lib/repositories/cache/pg-stats-repository'
 import logger from '@/lib/log_utils'
 import { withPublicValidation } from '@/lib/validation/middleware'
 import { z } from 'zod'

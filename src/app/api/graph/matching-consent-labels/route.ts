@@ -60,9 +60,9 @@ async function matchingConsentLabelsHandler(_request: Request, _data: z.infer<ty
          gn.degree,
          COALESCE(st.has_follow_bluesky, false) as has_follow_bluesky,
          COALESCE(st.has_follow_mastodon, false) as has_follow_mastodon
-       FROM public.sources_targets st
-       INNER JOIN public.users_with_name_consent uwc ON st.node_id = uwc.twitter_id
-       INNER JOIN public.graph_nodes_03_11_25 gn ON st.node_id = gn.id
+       FROM network.sources_targets st
+       INNER JOIN consent.users_with_name_consent uwc ON st.node_id = uwc.twitter_id
+       INNER JOIN graph.graph_nodes_03_11_25 gn ON st.node_id = gn.id
        WHERE st.source_id = $1
        ORDER BY gn.degree DESC NULLS LAST
        LIMIT $2`,

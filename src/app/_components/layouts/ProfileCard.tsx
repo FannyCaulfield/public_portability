@@ -1,13 +1,13 @@
 'use client'
 
 import { useSession } from 'next-auth/react'
-import Image from 'next/image'
 import { FaBluesky, FaXTwitter, FaMastodon } from 'react-icons/fa6'
 import { IoUnlinkOutline } from "react-icons/io5"
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useTheme } from '@/hooks/useTheme'
 import { useCommunityColors } from '@/hooks/useCommunityColors'
+import { countConnectedProviders, getConnectedAccount } from '@/lib/utils/connected-accounts'
 
 type ProfileCardProps = {
   type: 'twitter' | 'bluesky' | 'mastodon'
@@ -30,33 +30,34 @@ export default function ProfileCard({ type, showUnlink = false }: ProfileCardPro
 
   if (!session?.user) return null
 
+  const twitterAccount = getConnectedAccount(session.user, 'twitter')
+  const blueskyAccount = getConnectedAccount(session.user, 'bluesky')
+  const mastodonAccount = getConnectedAccount(session.user, 'mastodon')
+
   const profiles = {
     twitter: {
-      username: session.user.twitter_username,
+      username: twitterAccount?.username,
       instance: null,
       image: session.user.twitter_image,
-      id: session.user.twitter_id,
       icon: <FaXTwitter className="text-[#0f1419] text-2xl" />,
-      connected: !!session.user.twitter_id
+      connected: !!twitterAccount
     },
     bluesky: {
-      username: session.user.bluesky_username,
+      username: blueskyAccount?.username,
       instance: null,
       image: session.user.bluesky_image,
-      id: session.user.bluesky_id,
       icon: <FaBluesky className="text-[#0085FF] text-2xl" />,
-      connected: !!session.user.bluesky_id
+      connected: !!blueskyAccount
     },
     mastodon: {
-      username: session.user.mastodon_username,
-      instance: session.user.mastodon_instance ? new URL(session.user.mastodon_instance)?.hostname : "",
+      username: mastodonAccount?.username,
+      instance: mastodonAccount?.instance ? new URL(mastodonAccount.instance)?.hostname : "",
       // On ignore l’image de profil mastodon pour l’instant
       // à voir si on la remplace par une image générique, 
       // ou si on autorise un accès wildcard 
       image: null, //session.user.mastodon_image,
-      id: session.user.mastodon_id,
       icon: <FaMastodon className="text-[#6364FF] text-2xl" />,
-      connected: !!session.user.mastodon_id
+      connected: !!mastodonAccount
     }
   }
 
@@ -64,11 +65,7 @@ export default function ProfileCard({ type, showUnlink = false }: ProfileCardPro
   if (!profile.connected) return null
 
   // Compter le nombre de comptes connectés
-  const connectedAccounts = [
-    session.user.twitter_id,
-    session.user.bluesky_id,
-    session.user.mastodon_id
-  ].filter(Boolean).length
+  const connectedAccounts = countConnectedProviders(session.user)
 
   const isLastAccount = connectedAccounts <= 1
 

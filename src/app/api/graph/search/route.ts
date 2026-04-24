@@ -4,7 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { pgGraphNodesRepository } from '@/lib/repositories/public/pg-graph-nodes-repository'
+import { pgGraphNodesRepository } from '@/lib/repositories/graph/pg-graph-nodes-repository'
 import logger from '@/lib/log_utils'
 
 // Helper to create a hash from coordinates (same as frontend)

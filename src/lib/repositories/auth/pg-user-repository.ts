@@ -2,6 +2,8 @@ import { queryNextAuth } from '../../database'
 import type { DBUser } from '../../types/database'
 import logger from '../../log_utils'
 
+type SupportedProvider = 'twitter' | 'bluesky' | 'mastodon' | 'facebook'
+
 /**
  * Repository pour les opérations sur les utilisateurs (schéma next-auth)
  */
@@ -42,27 +44,48 @@ export const pgUserRepository = {
    * Récupère un utilisateur par provider ID
    */
   async getUserByProviderId(
-    provider: 'twitter' | 'bluesky' | 'mastodon' | 'facebook',
-    providerId: string
+    provider: SupportedProvider,
+    providerId: string,
+    instance?: string
   ): Promise<DBUser | null> {
     try {
-      const columnMap = {
-        twitter: 'twitter_id',
-        bluesky: 'bluesky_id',
-        mastodon: 'mastodon_id',
-        facebook: 'facebook_id',
+      if (provider === 'facebook') {
+        const result = await queryNextAuth<DBUser>(
+          `SELECT * FROM "next-auth".users WHERE facebook_id = $1`,
+          [providerId]
+        )
+
+        return result.rows[0] || null
       }
 
-      const column = columnMap[provider]
-      const result = await queryNextAuth<DBUser>(
-        `SELECT * FROM "next-auth".users WHERE ${column} = $1`,
-        [providerId]
-      )
+      const normalizedInstance = instance ?? ''
+      const result = provider === 'mastodon'
+        ? await queryNextAuth<DBUser>(
+            `SELECT u.*
+             FROM "next-auth".social_accounts sa
+             INNER JOIN "next-auth".users u ON u.id = sa.user_id
+             WHERE sa.provider = $1
+               AND sa.provider_account_id = $2
+               AND sa.instance = $3
+             LIMIT 1`,
+            [provider, providerId, normalizedInstance]
+          )
+        : await queryNextAuth<DBUser>(
+            `SELECT u.*
+             FROM "next-auth".social_accounts sa
+             INNER JOIN "next-auth".users u ON u.id = sa.user_id
+             WHERE sa.provider = $1
+               AND sa.provider_account_id = $2
+             LIMIT 1`,
+            [provider, providerId]
+          )
+
       return result.rows[0] || null
     } catch (error) {
       logger.logError('Repository', 'pgUserRepository.getUserByProviderId', 'Error fetching user by provider', undefined, {
         provider,
         providerId,
+        instance,
         error
       })
       throw error

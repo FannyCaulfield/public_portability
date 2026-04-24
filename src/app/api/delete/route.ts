@@ -3,10 +3,10 @@ import { redis } from '@/lib/redis'
 import logger from '@/lib/log_utils'
 import { withValidation } from "@/lib/validation/middleware"
 import { z } from "zod"
-import { queryPublic } from '@/lib/database'
+import { queryNetwork } from '@/lib/database'
 import { pgUserRepository } from '@/lib/repositories/auth/pg-user-repository'
 import { publishSSEEvent, publishNodeTypeChanges } from '@/lib/sse-publisher'
-import { pgGraphNodesRepository } from '@/lib/repositories/public/pg-graph-nodes-repository'
+import { pgGraphNodesRepository } from '@/lib/repositories/graph/pg-graph-nodes-repository'
 
 // Schéma vide car cette route ne nécessite pas de body
 const EmptySchema = z.object({}).strict()
@@ -40,7 +40,7 @@ async function deleteHandler(_request: Request, _validatedData: {}, session: any
     if (session.user.has_onboarded) {
       logger.logInfo('API', 'DELETE /api/delete', 'User has onboarded, cleaning up public schema data', userId)
       try {
-        await queryPublic(`DELETE FROM sources WHERE id = $1`, [userId])
+        await queryNetwork(`DELETE FROM sources WHERE id = $1`, [userId])
       } catch (e: any) {
         logger.logError('API', 'DELETE /api/delete', e instanceof Error ? e : new Error(String(e)), userId, { context: 'Deleting source' })
         throw e

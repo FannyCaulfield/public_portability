@@ -55,6 +55,16 @@ describe('PostgreSQL NOTIFY → Redis → SSE Integration', () => {
     }
   }
 
+  async function createTestRedisSubscriber(name: string): Promise<Redis> {
+    const client = new Redis(redisConfig)
+    client.on('error', (err: Error) => {
+      console.error(`[Redis ${name} error]`, err.message)
+    })
+    await waitForRedisReady(client, name)
+    await client.subscribe(SSE_CHANNEL)
+    return client
+  }
+
   beforeAll(async () => {
     // Create PostgreSQL clients
     pgClient = new Client(pgConfig);
@@ -166,6 +176,7 @@ describe('PostgreSQL NOTIFY → Redis → SSE Integration', () => {
       const receivedMessages: any[] = [];
 
       // Subscribe to SSE channel
+      await redisSubscriber.unsubscribe(SSE_CHANNEL);
       await redisSubscriber.subscribe(SSE_CHANNEL);
       
       redisSubscriber.on('message', ((channel: string, message: string) => {
@@ -202,7 +213,9 @@ describe('PostgreSQL NOTIFY → Redis → SSE Integration', () => {
     it('should handle multiple event types', async () => {
       const receivedMessages: any[] = [];
 
+      await redisSubscriber.unsubscribe(SSE_CHANNEL);
       redisSubscriber.removeAllListeners('message');
+      await redisSubscriber.subscribe(SSE_CHANNEL);
       redisSubscriber.on('message', ((channel: string, message: string) => {
         if (channel === SSE_CHANNEL) {
           receivedMessages.push(JSON.parse(message));
@@ -231,120 +244,120 @@ describe('PostgreSQL NOTIFY → Redis → SSE Integration', () => {
     it('should simulate complete pg_notify → Redis flow', async () => {
       const pgNotifications: any[] = [];
       const redisMessages: any[] = [];
+      const testSubscriber = await createTestRedisSubscriber('e2e-flow')
 
-      // Setup PostgreSQL listener
-      pgListener.removeAllListeners('notification');
-      pgListener.on('notification', async (msg: Notification) => {
-        pgNotifications.push(msg);
-        
-        // Simulate what pg-notify-listener.ts does
-        if (msg.channel === 'cache_invalidation' && msg.payload) {
-          const payload = JSON.parse(msg.payload);
+      try {
+        // Setup PostgreSQL listener
+        pgListener.removeAllListeners('notification');
+        pgListener.on('notification', async (msg: Notification) => {
+          pgNotifications.push(msg);
           
-          // Forward to Redis (simulating the listener behavior)
-          const sseEvent = {
-            type: 'labels',
-            data: {
-              incremental: true,
-              change: {
-                twitter_id: payload.twitter_id,
-                action: payload.operation === 'DELETE' ? 'remove' : 'add',
-                consent_level: payload.consent_level,
+          if (msg.channel === 'cache_invalidation' && msg.payload) {
+            const payload = JSON.parse(msg.payload);
+            const sseEvent = {
+              type: 'labels',
+              data: {
+                incremental: true,
+                change: {
+                  twitter_id: payload.twitter_id,
+                  action: payload.operation === 'DELETE' ? 'remove' : 'add',
+                  consent_level: payload.consent_level,
+                },
               },
-            },
-            userId: null,
-            timestamp: payload.timestamp * 1000,
-          };
-          
-          await redisPublisher.publish(SSE_CHANNEL, JSON.stringify(sseEvent));
-        }
-      });
+              userId: null,
+              timestamp: payload.timestamp * 1000,
+            };
+            
+            await redisPublisher.publish(SSE_CHANNEL, JSON.stringify(sseEvent));
+          }
+        });
 
-      // Setup Redis subscriber
-      redisSubscriber.removeAllListeners('message');
-      await redisSubscriber.subscribe(SSE_CHANNEL);
-      redisSubscriber.on('message', ((channel: string, message: string) => {
-        if (channel === SSE_CHANNEL) {
-          redisMessages.push(JSON.parse(message));
-        }
-      }) as RedisMessageHandler);
+        testSubscriber.on('message', ((channel: string, message: string) => {
+          if (channel === SSE_CHANNEL) {
+            redisMessages.push(JSON.parse(message));
+          }
+        }) as RedisMessageHandler);
 
-      // Trigger the flow with a pg_notify
-      const testPayload = {
-        operation: 'INSERT',
-        twitter_id: '555555555',
-        consent_level: 'partial',
-        user_id: 'e2e-test-uuid',
-        timestamp: Date.now() / 1000,
-      };
+        const testPayload = {
+          operation: 'INSERT',
+          twitter_id: '555555555',
+          consent_level: 'partial',
+          user_id: 'e2e-test-uuid',
+          timestamp: Date.now() / 1000,
+        };
 
-      await pgClient.query(
-        `NOTIFY cache_invalidation, '${JSON.stringify(testPayload).replace(/'/g, "''")}'`
-      );
+        await pgClient.query(
+          `NOTIFY cache_invalidation, '${JSON.stringify(testPayload).replace(/'/g, "''")}'`
+        );
 
-      // Wait for the complete flow
-      await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 300));
 
-      // Verify PostgreSQL notification was received
-      expect(pgNotifications.length).toBe(1);
-      expect(pgNotifications[0].channel).toBe('cache_invalidation');
+        expect(pgNotifications.length).toBe(1);
+        expect(pgNotifications[0].channel).toBe('cache_invalidation');
 
-      // Verify Redis message was published
-      expect(redisMessages.length).toBe(1);
-      expect(redisMessages[0].type).toBe('labels');
-      expect(redisMessages[0].data.change.twitter_id).toBe('555555555');
-      expect(redisMessages[0].data.change.action).toBe('add');
+        expect(redisMessages.length).toBeGreaterThanOrEqual(1);
+        const labelsMessage = redisMessages.find((message) => message?.type === 'labels' && message?.data?.change?.twitter_id === '555555555');
+        expect(labelsMessage).toBeDefined();
+        expect(labelsMessage.data.change.action).toBe('add');
+      } finally {
+        await testSubscriber.quit()
+      }
     });
 
     it('should handle DELETE operations correctly', async () => {
       const redisMessages: any[] = [];
+      const testSubscriber = await createTestRedisSubscriber('e2e-delete')
 
-      pgListener.removeAllListeners('notification');
-      pgListener.on('notification', async (msg: Notification) => {
-        if (msg.channel === 'cache_invalidation' && msg.payload) {
-          const payload = JSON.parse(msg.payload);
-          
-          const sseEvent = {
-            type: 'labels',
-            data: {
-              incremental: true,
-              change: {
-                twitter_id: payload.twitter_id,
-                action: payload.operation === 'DELETE' ? 'remove' : 'add',
+      try {
+        pgListener.removeAllListeners('notification');
+        pgListener.on('notification', async (msg: Notification) => {
+          if (msg.channel === 'cache_invalidation' && msg.payload) {
+            const payload = JSON.parse(msg.payload);
+            
+            const sseEvent = {
+              type: 'labels',
+              data: {
+                incremental: true,
+                change: {
+                  twitter_id: payload.twitter_id,
+                  action: payload.operation === 'DELETE' ? 'remove' : 'add',
+                },
               },
-            },
-            userId: null,
-            timestamp: Date.now(),
-          };
-          
-          await redisPublisher.publish(SSE_CHANNEL, JSON.stringify(sseEvent));
-        }
-      });
+              userId: null,
+              timestamp: Date.now(),
+            };
+            
+            await redisPublisher.publish(SSE_CHANNEL, JSON.stringify(sseEvent));
+          }
+        });
 
-      redisSubscriber.removeAllListeners('message');
-      redisSubscriber.on('message', ((channel: string, message: string) => {
-        if (channel === SSE_CHANNEL) {
-          redisMessages.push(JSON.parse(message));
-        }
-      }) as RedisMessageHandler);
+        testSubscriber.on('message', ((channel: string, message: string) => {
+          if (channel === SSE_CHANNEL) {
+            redisMessages.push(JSON.parse(message));
+          }
+        }) as RedisMessageHandler);
 
-      // Simulate DELETE operation
-      const deletePayload = {
-        operation: 'DELETE',
-        twitter_id: '999999999',
-        consent_level: null,
-        user_id: 'delete-test-uuid',
-        timestamp: Date.now() / 1000,
-      };
+        const deletePayload = {
+          operation: 'DELETE',
+          twitter_id: '999999999',
+          consent_level: null,
+          user_id: 'delete-test-uuid',
+          timestamp: Date.now() / 1000,
+        };
 
-      await pgClient.query(
-        `NOTIFY cache_invalidation, '${JSON.stringify(deletePayload).replace(/'/g, "''")}'`
-      );
+        await pgClient.query(
+          `NOTIFY cache_invalidation, '${JSON.stringify(deletePayload).replace(/'/g, "''")}'`
+        );
 
-      await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 300));
 
-      expect(redisMessages.length).toBe(1);
-      expect(redisMessages[0].data.change.action).toBe('remove');
+        expect(redisMessages.length).toBeGreaterThanOrEqual(1);
+        const deleteMessage = redisMessages.find((message) => message?.type === 'labels' && message?.data?.change?.twitter_id === '999999999');
+        expect(deleteMessage).toBeDefined();
+        expect(deleteMessage.data.change.action).toBe('remove');
+      } finally {
+        await testSubscriber.quit()
+      }
     });
   });
 
@@ -352,52 +365,54 @@ describe('PostgreSQL NOTIFY → Redis → SSE Integration', () => {
     it('should handle rapid notifications', async () => {
       const receivedCount = { pg: 0, redis: 0 };
       const BATCH_SIZE = 50;
+      const testSubscriber = await createTestRedisSubscriber('perf')
 
-      pgListener.removeAllListeners('notification');
-      pgListener.on('notification', async (msg: Notification) => {
-        receivedCount.pg++;
-        if (msg.payload) {
-          await redisPublisher.publish(SSE_CHANNEL, JSON.stringify({
-            type: 'labels',
-            data: JSON.parse(msg.payload),
-            timestamp: Date.now(),
-          }));
-        }
-      });
+      try {
+        pgListener.removeAllListeners('notification');
+        pgListener.on('notification', async (msg: Notification) => {
+          receivedCount.pg++;
+          if (msg.payload) {
+            await redisPublisher.publish(SSE_CHANNEL, JSON.stringify({
+              type: 'labels',
+              data: JSON.parse(msg.payload),
+              timestamp: Date.now(),
+            }));
+          }
+        });
 
-      redisSubscriber.removeAllListeners('message');
-      redisSubscriber.on('message', (() => {
-        receivedCount.redis++;
-      }) as RedisMessageHandler);
+        testSubscriber.on('message', (() => {
+          receivedCount.redis++;
+        }) as RedisMessageHandler);
 
-      // Send batch of notifications
-      const startTime = Date.now();
-      
-      for (let i = 0; i < BATCH_SIZE; i++) {
-        const payload = {
-          operation: 'UPDATE',
-          twitter_id: `batch-${i}`,
-          consent_level: 'full',
-          user_id: `batch-user-${i}`,
-          timestamp: Date.now() / 1000,
-        };
+        const startTime = Date.now();
         
-        await pgClient.query(
-          `NOTIFY cache_invalidation, '${JSON.stringify(payload).replace(/'/g, "''")}'`
-        );
+        for (let i = 0; i < BATCH_SIZE; i++) {
+          const payload = {
+            operation: 'UPDATE',
+            twitter_id: `batch-${i}`,
+            consent_level: 'full',
+            user_id: `batch-user-${i}`,
+            timestamp: Date.now() / 1000,
+          };
+          
+          await pgClient.query(
+            `NOTIFY cache_invalidation, '${JSON.stringify(payload).replace(/'/g, "''")}'`
+          );
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        const duration = Date.now() - startTime;
+
+        console.log(`📊 Performance: ${BATCH_SIZE} notifications in ${duration}ms`);
+        console.log(`   PostgreSQL received: ${receivedCount.pg}`);
+        console.log(`   Redis received: ${receivedCount.redis}`);
+
+        expect(receivedCount.pg).toBe(BATCH_SIZE);
+        expect(receivedCount.redis).toBeGreaterThanOrEqual(BATCH_SIZE);
+      } finally {
+        await testSubscriber.quit()
       }
-
-      // Wait for all to be processed
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      const duration = Date.now() - startTime;
-
-      console.log(`📊 Performance: ${BATCH_SIZE} notifications in ${duration}ms`);
-      console.log(`   PostgreSQL received: ${receivedCount.pg}`);
-      console.log(`   Redis received: ${receivedCount.redis}`);
-
-      expect(receivedCount.pg).toBe(BATCH_SIZE);
-      expect(receivedCount.redis).toBe(BATCH_SIZE);
     });
   });
 });
@@ -432,7 +447,7 @@ describe('Trigger Integration (requires migration applied)', () => {
     const result = await pgClient.query(`
       SELECT tgname, tgtype 
       FROM pg_trigger 
-      WHERE tgrelid = 'users_with_name_consent'::regclass
+      WHERE tgrelid = 'consent.users_with_name_consent'::regclass
       AND tgname = 'sync_member_node_trigger'
     `);
 

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { pgGraphNodesRepository } from '@/lib/repositories/public/pg-graph-nodes-repository';
+import { pgGraphNodesRepository } from '@/lib/repositories/graph/pg-graph-nodes-repository';
 import logger from '@/lib/log_utils';
 import { withValidation, withPublicValidation } from '@/lib/validation/middleware';
 import { z } from 'zod';

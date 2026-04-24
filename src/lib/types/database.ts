@@ -15,18 +15,22 @@ export interface DBUser {
   have_seen_v2: boolean
   research_accepted: boolean
   automatic_reconnect: boolean
-  twitter_id: string | null
-  twitter_username: string | null
-  twitter_image: string | null
-  bluesky_id: string | null
-  bluesky_username: string | null
-  bluesky_image: string | null
-  mastodon_id: string | null
-  mastodon_username: string | null
-  mastodon_image: string | null
-  mastodon_instance: string | null
   created_at: Date
   updated_at: Date
+}
+
+export interface DBSocialAccount {
+  id: string
+  user_id: string
+  provider: string
+  provider_account_id: string | null
+  username: string | null
+  instance: string | null
+  email: string | null
+  is_primary: boolean
+  created_at: Date
+  updated_at: Date
+  last_seen_at: Date | null
 }
 
 export interface DBAccount {

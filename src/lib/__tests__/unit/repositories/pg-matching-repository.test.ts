@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { pgMatchingRepository } from '../../../repositories/public/pg-matching-repository'
+import { pgMatchingRepository } from '../../../repositories/network/pg-matching-repository'
 import { pgUserRepository } from '../../../repositories/auth/pg-user-repository'
 import { publicPool, nextAuthPool } from '../../../database'
 import { randomUUID } from 'crypto'

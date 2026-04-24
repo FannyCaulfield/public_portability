@@ -76,7 +76,7 @@ describe('Mastodon instances cache invalidation (pg_notify → Node listener →
 
     // Clean-up test row if it still exists
     try {
-      await pg.query('DELETE FROM public.mastodon_instances WHERE instance = $1', [testInstance]);
+      await pg.query('DELETE FROM instances.mastodon_instances WHERE instance = $1', [testInstance]);
     } catch {
       // ignore
     }
@@ -87,11 +87,11 @@ describe('Mastodon instances cache invalidation (pg_notify → Node listener →
 
   it('should refresh Redis key mastodon:instances when mastodon_instances changes', async () => {
     // Ensure clean slate
-    await pg.query('DELETE FROM public.mastodon_instances WHERE instance = $1', [testInstance]);
+    await pg.query('DELETE FROM instances.mastodon_instances WHERE instance = $1', [testInstance]);
 
     // Trigger INSERT (statement-level trigger will fire)
     await pg.query(
-      `INSERT INTO public.mastodon_instances (id, instance, client_id, client_secret)
+      `INSERT INTO instances.mastodon_instances (id, instance, client_id, client_secret)
        VALUES (extensions.uuid_generate_v4(), $1, $2, $3)
        ON CONFLICT (id) DO NOTHING`,
       [testInstance, 'client_id_test', 'client_secret_test']
@@ -110,7 +110,7 @@ describe('Mastodon instances cache invalidation (pg_notify → Node listener →
     }, 8000, 200);
 
     // Now DELETE and ensure it disappears
-    await pg.query('DELETE FROM public.mastodon_instances WHERE instance = $1', [testInstance]);
+    await pg.query('DELETE FROM instances.mastodon_instances WHERE instance = $1', [testInstance]);
 
     await waitForCondition(async () => {
       const raw = await redis.get('mastodon:instances');
@@ -135,11 +135,11 @@ describe('Mastodon instances cache invalidation (pg_notify → Node listener →
     expect(result.rows[0].prosrc).toContain('pg_notify');
   });
 
-  it('should verify trigger exists on public.mastodon_instances', async () => {
+  it('should verify trigger exists on instances.mastodon_instances', async () => {
     const result = await pg.query(`
       SELECT tgname
       FROM pg_trigger
-      WHERE tgrelid = 'public.mastodon_instances'::regclass
+      WHERE tgrelid = 'instances.mastodon_instances'::regclass
         AND tgname = 'refresh_mastodon_cache_on_change'
     `);
 

@@ -13,6 +13,7 @@ import twitterIcon from '../../../../../public/newSVG/X.svg';
 import { ReconnectLoginModal } from '@/app/_components/modales/ReconnectLoginModal';
 import { quantico } from '@/app/fonts/plex';
 import { useGraphDataOptional } from '@/contexts/GraphDataContext';
+import { hasConnectedProvider } from '@/lib/utils/connected-accounts';
 
 // Tooltip component for hover info
 function InfoTooltip({ 
@@ -173,15 +174,55 @@ export function FloatingStatsPanel({
   const [isUpdatingVisibility, setIsUpdatingVisibility] = useState(false);
   const [visibilityError, setVisibilityError] = useState<string | null>(null);
   const isVisible = currentConsentLevel === 'all_consent';
+
+  useEffect(() => {
+    console.log('[FloatingStatsPanel] consent render state', {
+      isLoggedIn,
+      showFollowers,
+      showFollowing,
+      currentConsentLevel,
+      isVisible,
+      isUpdatingVisibility,
+      hasOnConsentLevelChange: !!onConsentLevelChange,
+      hasGraphData: !!graphData,
+      hasInvalidateLabelsCache: !!graphData?.invalidateLabelsCache,
+      hasFetchPersonalLabels: !!graphData?.fetchPersonalLabels,
+    });
+  }, [
+    isLoggedIn,
+    showFollowers,
+    showFollowing,
+    currentConsentLevel,
+    isVisible,
+    isUpdatingVisibility,
+    onConsentLevelChange,
+    graphData,
+  ]);
   
   // Handle visibility toggle
   const handleVisibilityToggle = useCallback(async () => {
-    if (!isLoggedIn || isUpdatingVisibility) return;
+    console.log('[FloatingStatsPanel] visibility toggle clicked', {
+      isLoggedIn,
+      isUpdatingVisibility,
+      currentConsentLevel,
+      isVisible,
+    });
+
+    if (!isLoggedIn || isUpdatingVisibility) {
+      console.log('[FloatingStatsPanel] visibility toggle ignored', {
+        reason: !isLoggedIn ? 'not_logged_in' : 'already_updating',
+      });
+      return;
+    }
     
     setIsUpdatingVisibility(true);
     setVisibilityError(null);
     
     const newLevel = isVisible ? 'no_consent' : 'all_consent';
+    console.log('[FloatingStatsPanel] submitting consent update', {
+      previousLevel: currentConsentLevel,
+      newLevel,
+    });
     
     try {
       const response = await fetch('/api/graph/consent_labels', {
@@ -190,29 +231,66 @@ export function FloatingStatsPanel({
         body: JSON.stringify({ consent_level: newLevel }),
       });
 
+      console.log('[FloatingStatsPanel] consent update response received', {
+        ok: response.ok,
+        status: response.status,
+      });
+
       if (!response.ok) {
         const data = await response.json();
+        console.error('[FloatingStatsPanel] consent update failed', data);
         throw new Error(data.error || 'Failed to update visibility');
       }
 
       // Update local state immediately for responsive UI
+      console.log('[FloatingStatsPanel] applying optimistic consent level', {
+        newLevel,
+      });
       onConsentLevelChange?.(newLevel);
+
+      // Refresh server-side labels cache in background
+      fetch('/api/graph/refresh-labels-cache', { method: 'POST' })
+        .then(res => {
+          console.log('[FloatingStatsPanel] refresh-labels-cache response', {
+            ok: res.ok,
+            status: res.status,
+          });
+        })
+        .catch(error => {
+          console.error('[FloatingStatsPanel] refresh-labels-cache failed', error);
+        });
+
+      // Also invalidate client-side graph labels cache and refetch
+      if (graphData?.invalidateLabelsCache) {
+        console.log('[FloatingStatsPanel] invalidating client label cache');
+        graphData.invalidateLabelsCache().then(() => {
+          console.log('[FloatingStatsPanel] client label cache invalidated');
+          console.log('[FloatingStatsPanel] refetching personal labels');
+          graphData.fetchPersonalLabels?.();
+        }).catch(error => {
+          console.error('[FloatingStatsPanel] client label cache invalidation failed', error);
+        });
+      } else {
+        console.log('[FloatingStatsPanel] graphData.invalidateLabelsCache unavailable');
+      }
       
       // SSE will handle the incremental label update for other clients
       // No need to refetch all labels - the SSE handler in GraphDataContext
       // will add/remove the single label that changed
     } catch (err) {
+      console.error('[FloatingStatsPanel] visibility toggle error', err);
       setVisibilityError(err instanceof Error ? err.message : 'An error occurred');
       // Revert on error
       onConsentLevelChange?.(isVisible ? 'all_consent' : 'no_consent');
     } finally {
+      console.log('[FloatingStatsPanel] visibility toggle request finished');
       setIsUpdatingVisibility(false);
     }
   }, [isLoggedIn, isUpdatingVisibility, isVisible, graphData, onConsentLevelChange]);
   const hasOnboarded = session?.user?.has_onboarded ?? false;
-  const hasTwitter = !!session?.user?.twitter_username;
-  const hasBluesky = !!session?.user?.bluesky_username;
-  const hasMastodon = !!session?.user?.mastodon_username;
+  const hasTwitter = hasConnectedProvider(session?.user, 'twitter');
+  const hasBluesky = hasConnectedProvider(session?.user, 'bluesky');
+  const hasMastodon = hasConnectedProvider(session?.user, 'mastodon');
   const hasAnyPlatform = hasBluesky || hasMastodon;
 
   // Helper to check if account has Mastodon
@@ -845,8 +923,8 @@ export function FloatingStatsPanel({
             </div>
           )}
 
-          {/* Visibility Toggle - Only in Discover mode for logged in users */}
-          {isLoggedIn && !showFollowers && !showFollowing && (
+          {/* Visibility Toggle - Available for logged in users in all graph modes */}
+          {isLoggedIn && (
             <div className="mt-3 pt-3 border-t border-slate-700/50">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">

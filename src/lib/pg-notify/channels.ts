@@ -7,6 +7,7 @@ export const PG_NOTIFY_CHANNELS = {
   USER_STATS_CACHE_INVALIDATION: 'user_stats_cache_invalidation',
   GLOBAL_STATS_CACHE_INVALIDATION: 'global_stats_cache_invalidation',
   SYNC_REDIS_MAPPING: 'sync_redis_mapping',
+  NETWORK_SYNC_JOBS: 'network_sync_jobs',
 } as const;
 
 export type PgNotifyChannel = (typeof PG_NOTIFY_CHANNELS)[keyof typeof PG_NOTIFY_CHANNELS];

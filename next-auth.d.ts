@@ -1,6 +1,7 @@
 import "next-auth"
 import { DefaultSession, DefaultUser } from "next-auth"
 import { JWT } from "next-auth/jwt"
+import type { SessionSocialAccount } from "@/lib/types/social-account"
 
 declare module "next-auth" {
   interface Session {
@@ -22,6 +23,7 @@ declare module "next-auth" {
       bluesky_id?: string | null
       bluesky_username?: string | null
       bluesky_image?: string | null
+      social_accounts?: SessionSocialAccount[]
     } & DefaultSession["user"]
   }
 
@@ -43,6 +45,7 @@ declare module "next-auth" {
     bluesky_id?: string | null
     bluesky_username?: string | null
     bluesky_image?: string | null
+    social_accounts?: SessionSocialAccount[]
   }
 }
 

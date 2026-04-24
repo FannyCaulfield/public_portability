@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations as useTranslationsStats } from 'next-intl';
+import { hasConnectedProvider } from '@/lib/utils/connected-accounts';
 
 // Helper to build Mastodon profile URL from handle
 function getMastodonProfileUrl(handle: string): string | null {
@@ -144,8 +145,8 @@ export function FloatingAccountsPanel({
   }, [selectedAccounts, setCookie]);
 
   // Check connected platforms and onboarding status
-  const hasBluesky = !!session?.user?.bluesky_username;
-  const hasMastodon = !!session?.user?.mastodon_username;
+  const hasBluesky = hasConnectedProvider(session?.user, 'bluesky');
+  const hasMastodon = hasConnectedProvider(session?.user, 'mastodon');
   const hasOnboarded = session?.user?.has_onboarded ?? false;
 
   // Helper to check if account has Mastodon (can be mastodon_handle OR mastodon_username)

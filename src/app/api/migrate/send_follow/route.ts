@@ -11,7 +11,7 @@ import { SendFollowRequestSchema, MatchingAccountSchema } from '@/lib/validation
 import { z } from 'zod'
 import { StatsRepository } from '@/lib/repositories/statsRepository'
 import { checkRateLimit, consumeRateLimit } from '@/lib/services/rateLimitService'
-import { pgMatchingRepository } from '@/lib/repositories/public/pg-matching-repository'
+import { pgMatchingRepository } from '@/lib/repositories/network/pg-matching-repository'
 import { publishFollowingStatusUpdate } from '@/lib/sse-publisher'
 
 // Use the schema-inferred type to match the incoming payload shape

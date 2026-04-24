@@ -3,7 +3,7 @@
  * Combine les données de graph_nodes avec les mappings Redis pour le matching
  */
 
-import { pgGraphNodesRepository, GraphNodeRow } from '../repositories/public/pg-graph-nodes-repository'
+import { pgGraphNodesRepository, GraphNodeRow } from '../repositories/graph/pg-graph-nodes-repository'
 import { redisMatchingRepository } from '../repositories/redis-matching-repository'
 import logger from '../log_utils'
 

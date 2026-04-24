@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { redis } from '@/lib/redis';
 import { withInternalValidation } from '@/lib/validation/internal-middleware';
-import { pgPythonTasksRepository } from '@/lib/repositories/public/pg-python-tasks-repository'
+import { pgPythonTasksRepository } from '@/lib/repositories/jobs/pg-python-tasks-repository'
 
 // Schéma de validation pour le payload du trigger
 const ActivateWaitingTasksSchema = z.object({

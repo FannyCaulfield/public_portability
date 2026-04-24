@@ -18,36 +18,78 @@ declare global {
   var __nextAuthPool: Pool | undefined
   // eslint-disable-next-line no-var
   var __publicPool: Pool | undefined
+  // eslint-disable-next-line no-var
+  var __consentPool: Pool | undefined
+  // eslint-disable-next-line no-var
+  var __jobsPool: Pool | undefined
+  // eslint-disable-next-line no-var
+  var __networkPool: Pool | undefined
+  // eslint-disable-next-line no-var
+  var __instancesPool: Pool | undefined
+  // eslint-disable-next-line no-var
+  var __graphPool: Pool | undefined
+  // eslint-disable-next-line no-var
+  var __cachePool: Pool | undefined
+}
+
+function getPoolConfig(max: number) {
+  const host = process.env.PGBOUNCER_HOST || process.env.POSTGRES_HOST || 'pgbouncer'
+  const port = parseInt(process.env.PGBOUNCER_PORT || process.env.POSTGRES_PORT || '6432')
+
+  return {
+    host,
+    port,
+    database: process.env.POSTGRES_DB || 'nexus',
+    user: process.env.POSTGRES_USER || 'postgres',
+    password: process.env.POSTGRES_PASSWORD || 'mysecretpassword',
+    max,
+    idleTimeoutMillis: 10000,
+    connectionTimeoutMillis: 30000,
+    allowExitOnIdle: true,
+    maxLifetimeSeconds: 300,
+  }
 }
 
 function getNextAuthPoolConfig() {
-  return {
-    host: process.env.PGBOUNCER_HOST || 'pgbouncer',
-    port: parseInt(process.env.PGBOUNCER_PORT || '6432'),
-    database: process.env.POSTGRES_DB || 'nexus',
-    user: process.env.POSTGRES_USER || 'postgres',
-    password: process.env.POSTGRES_PASSWORD || 'mysecretpassword',
-    max: 10,                        // Réduit pour éviter saturation PgBouncer
-    idleTimeoutMillis: 10000,       // Libère les connexions idle plus vite (10s)
-    connectionTimeoutMillis: 30000, // Fail fast si pool saturé
-    allowExitOnIdle: true,          // Permet de fermer les connexions idle
-    maxLifetimeSeconds: 300,        // Force rotation des connexions toutes les 5 min
-  }
+  return getPoolConfig(10)
 }
 
 function getPublicPoolConfig() {
-  return {
-    host: process.env.PGBOUNCER_HOST || 'pgbouncer',
-    port: parseInt(process.env.PGBOUNCER_PORT || '6432'),
-    database: process.env.POSTGRES_DB || 'nexus',
-    user: process.env.POSTGRES_USER || 'postgres',
-    password: process.env.POSTGRES_PASSWORD || 'mysecretpassword',
-    max: 8,                         // Réduit pour éviter saturation PgBouncer
-    idleTimeoutMillis: 10000,       // Libère les connexions idle plus vite (10s)
-    connectionTimeoutMillis: 30000, // Fail fast si pool saturé
-    allowExitOnIdle: true,          // Permet de fermer les connexions idle
-    maxLifetimeSeconds: 300,        // Force rotation des connexions toutes les 5 min
-  }
+  return getPoolConfig(8)
+}
+
+function getConsentPoolConfig() {
+  return getPoolConfig(8)
+}
+
+function getJobsPoolConfig() {
+  return getPoolConfig(8)
+}
+
+function getNetworkPoolConfig() {
+  return getPoolConfig(8)
+}
+
+function getInstancesPoolConfig() {
+  return getPoolConfig(6)
+}
+
+function getGraphPoolConfig() {
+  return getPoolConfig(8)
+}
+
+function getCachePoolConfig() {
+  return getPoolConfig(6)
+}
+
+function attachPoolEvents(pool: Pool, poolName: string) {
+  pool.on('error', (err: Error) => {
+    console.log('Database', poolName, 'Unexpected error on idle client', undefined, { error: err.message })
+  })
+  pool.on('connect', () => {
+  })
+  pool.on('remove', () => {
+  })
 }
 
 // Création des pools avec singleton via globalThis
@@ -55,15 +97,7 @@ function getNextAuthPool(): Pool {
   if (!globalThis.__nextAuthPool) {
     console.log('Database', 'getNextAuthPool', 'Creating new nextAuthPool singleton')
     globalThis.__nextAuthPool = new Pool(getNextAuthPoolConfig())
-    globalThis.__nextAuthPool.on('error', (err: Error) => {
-      console.log('Database', 'nextAuthPool', 'Unexpected error on idle client', undefined, { error: err.message })
-    })
-    globalThis.__nextAuthPool.on('connect', () => {
-      // console.log('Database', 'nextAuthPool', 'New client connected')
-    })
-    globalThis.__nextAuthPool.on('remove', () => {
-      // console.log('Database', 'nextAuthPool', 'Client removed from pool')
-    })
+    attachPoolEvents(globalThis.__nextAuthPool, 'nextAuthPool')
   }
   return globalThis.__nextAuthPool
 }
@@ -72,17 +106,63 @@ function getPublicPool(): Pool {
   if (!globalThis.__publicPool) {
     console.log('Database', 'getPublicPool', 'Creating new publicPool singleton')
     globalThis.__publicPool = new Pool(getPublicPoolConfig())
-    globalThis.__publicPool.on('error', (err: Error) => {
-      console.log('Database', 'publicPool', 'Unexpected error on idle client', undefined, { error: err.message })
-    })
-    globalThis.__publicPool.on('connect', () => {
-      // console.log('Database', 'publicPool', 'New client connected')
-    })
-    globalThis.__publicPool.on('remove', () => {
-      // console.log('Database', 'publicPool', 'Client removed from pool')
-    })
+    attachPoolEvents(globalThis.__publicPool, 'publicPool')
   }
   return globalThis.__publicPool
+}
+
+function getConsentPool(): Pool {
+  if (!globalThis.__consentPool) {
+    console.log('Database', 'getConsentPool', 'Creating new consentPool singleton')
+    globalThis.__consentPool = new Pool(getConsentPoolConfig())
+    attachPoolEvents(globalThis.__consentPool, 'consentPool')
+  }
+  return globalThis.__consentPool
+}
+
+function getJobsPool(): Pool {
+  if (!globalThis.__jobsPool) {
+    console.log('Database', 'getJobsPool', 'Creating new jobsPool singleton')
+    globalThis.__jobsPool = new Pool(getJobsPoolConfig())
+    attachPoolEvents(globalThis.__jobsPool, 'jobsPool')
+  }
+  return globalThis.__jobsPool
+}
+
+function getNetworkPool(): Pool {
+  if (!globalThis.__networkPool) {
+    console.log('Database', 'getNetworkPool', 'Creating new networkPool singleton')
+    globalThis.__networkPool = new Pool(getNetworkPoolConfig())
+    attachPoolEvents(globalThis.__networkPool, 'networkPool')
+  }
+  return globalThis.__networkPool
+}
+
+function getInstancesPool(): Pool {
+  if (!globalThis.__instancesPool) {
+    console.log('Database', 'getInstancesPool', 'Creating new instancesPool singleton')
+    globalThis.__instancesPool = new Pool(getInstancesPoolConfig())
+    attachPoolEvents(globalThis.__instancesPool, 'instancesPool')
+  }
+  return globalThis.__instancesPool
+}
+
+function getGraphPool(): Pool {
+  if (!globalThis.__graphPool) {
+    console.log('Database', 'getGraphPool', 'Creating new graphPool singleton')
+    globalThis.__graphPool = new Pool(getGraphPoolConfig())
+    attachPoolEvents(globalThis.__graphPool, 'graphPool')
+  }
+  return globalThis.__graphPool
+}
+
+function getCachePool(): Pool {
+  if (!globalThis.__cachePool) {
+    console.log('Database', 'getCachePool', 'Creating new cachePool singleton')
+    globalThis.__cachePool = new Pool(getCachePoolConfig())
+    attachPoolEvents(globalThis.__cachePool, 'cachePool')
+  }
+  return globalThis.__cachePool
 }
 
 // Export des pools via getters (pour compatibilité avec le code existant)
@@ -103,32 +183,105 @@ export const publicPool = new Proxy({} as Pool, {
   }
 })
 
-// Helper pour exécuter une query sur le pool next-auth
-export async function queryNextAuth<T extends QueryResultRow = any>(
+export const consentPool = new Proxy({} as Pool, {
+  get(_, prop) {
+    const pool = getConsentPool()
+    const value = (pool as any)[prop]
+    return typeof value === 'function' ? value.bind(pool) : value
+  }
+})
+
+export const jobsPool = new Proxy({} as Pool, {
+  get(_, prop) {
+    const pool = getJobsPool()
+    const value = (pool as any)[prop]
+    return typeof value === 'function' ? value.bind(pool) : value
+  }
+})
+
+export const networkPool = new Proxy({} as Pool, {
+  get(_, prop) {
+    const pool = getNetworkPool()
+    const value = (pool as any)[prop]
+    return typeof value === 'function' ? value.bind(pool) : value
+  }
+})
+
+export const instancesPool = new Proxy({} as Pool, {
+  get(_, prop) {
+    const pool = getInstancesPool()
+    const value = (pool as any)[prop]
+    return typeof value === 'function' ? value.bind(pool) : value
+  }
+})
+
+export const graphPool = new Proxy({} as Pool, {
+  get(_, prop) {
+    const pool = getGraphPool()
+    const value = (pool as any)[prop]
+    return typeof value === 'function' ? value.bind(pool) : value
+  }
+})
+
+export const cachePool = new Proxy({} as Pool, {
+  get(_, prop) {
+    const pool = getCachePool()
+    const value = (pool as any)[prop]
+    return typeof value === 'function' ? value.bind(pool) : value
+  }
+})
+
+async function executeQuery<T extends QueryResultRow = any>(
+  pool: Pool,
+  searchPath: string,
+  logName: string,
   text: string,
   params?: any[]
 ): Promise<QueryResult<T>> {
-  const start = Date.now()
-  const client = await nextAuthPool.connect()
+  const client = await pool.connect()
   try {
-    // Définir le search_path pour cette connexion
-    await client.query('SET search_path TO "next-auth", public')
-    const result = await client.query<T>(text, params)
-    const duration = Date.now() - start
-    
-   
-    
-    return result
+    await client.query(`SET search_path TO ${searchPath}`)
+    return await client.query<T>(text, params)
   } catch (error) {
-    console.log('Database', 'queryNextAuth', 'Query failed', undefined, {
+    console.log('Database', logName, 'Query failed', undefined, {
       text,
       params,
-      error
+      error,
     })
     throw error
   } finally {
     client.release()
   }
+}
+
+async function executeTransaction<T>(
+  pool: Pool,
+  searchPath: string,
+  logName: string,
+  callback: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  const client = await pool.connect()
+  try {
+    await client.query(`SET search_path TO ${searchPath}`)
+    await client.query('BEGIN')
+    const result = await callback(client)
+    await client.query('COMMIT')
+    return result
+  } catch (error) {
+    await client.query('ROLLBACK')
+    console.log('Database', logName, 'Transaction failed and rolled back', undefined, { error })
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+// Helper pour exécuter une query sur le pool next-auth
+export async function queryNextAuth<T extends QueryResultRow = any>(
+  text: string,
+  params?: any[]
+): Promise<QueryResult<T>> {
+  return executeQuery<T>(nextAuthPool, '"next-auth", public', 'queryNextAuth', text, params)
 }
 
 // Helper pour exécuter une query sur le pool public
@@ -136,65 +289,99 @@ export async function queryPublic<T extends QueryResultRow = any>(
   text: string,
   params?: any[]
 ): Promise<QueryResult<T>> {
-  const start = Date.now()
-  const client = await publicPool.connect()
-  try {
-    // Définir le search_path pour cette connexion
-    await client.query('SET search_path TO public')
-    const result = await client.query<T>(text, params)
-    const duration = Date.now() - start
-    
-    return result
-  } catch (error) {
-   console.log('Database', 'queryPublic', 'Query failed', undefined, {
-      text,
-      params,
-      error
-    })
-    throw error
-  } finally {
-    client.release()
-  }
+  return executeQuery<T>(publicPool, 'public', 'queryPublic', text, params)
+}
+
+export async function queryConsent<T extends QueryResultRow = any>(
+  text: string,
+  params?: any[]
+): Promise<QueryResult<T>> {
+  return executeQuery<T>(consentPool, 'consent, public', 'queryConsent', text, params)
+}
+
+export async function queryJobs<T extends QueryResultRow = any>(
+  text: string,
+  params?: any[]
+): Promise<QueryResult<T>> {
+  return executeQuery<T>(jobsPool, 'jobs, public', 'queryJobs', text, params)
+}
+
+export async function queryNetwork<T extends QueryResultRow = any>(
+  text: string,
+  params?: any[]
+): Promise<QueryResult<T>> {
+  return executeQuery<T>(networkPool, 'network, graph, public, "next-auth"', 'queryNetwork', text, params)
+}
+
+export async function queryInstances<T extends QueryResultRow = any>(
+  text: string,
+  params?: any[]
+): Promise<QueryResult<T>> {
+  return executeQuery<T>(instancesPool, 'instances, public', 'queryInstances', text, params)
+}
+
+export async function queryGraph<T extends QueryResultRow = any>(
+  text: string,
+  params?: any[]
+): Promise<QueryResult<T>> {
+  return executeQuery<T>(graphPool, 'graph, consent, network, public, "next-auth"', 'queryGraph', text, params)
+}
+
+export async function queryCache<T extends QueryResultRow = any>(
+  text: string,
+  params?: any[]
+): Promise<QueryResult<T>> {
+  return executeQuery<T>(cachePool, 'cache, public', 'queryCache', text, params)
 }
 
 // Helper pour les transactions sur next-auth
 export async function transactionNextAuth<T>(
   callback: (client: PoolClient) => Promise<T>
 ): Promise<T> {
-  const client = await nextAuthPool.connect()
-  
-  try {
-    await client.query('BEGIN')
-    const result = await callback(client)
-    await client.query('COMMIT')
-    return result
-  } catch (error) {
-    await client.query('ROLLBACK')
-    console.log('Database', 'transactionNextAuth', 'Transaction failed and rolled back', undefined, { error })
-    throw error
-  } finally {
-    client.release()
-  }
+  return executeTransaction(nextAuthPool, '"next-auth", public', 'transactionNextAuth', callback)
 }
 
 // Helper pour les transactions sur public
 export async function transactionPublic<T>(
   callback: (client: PoolClient) => Promise<T>
 ): Promise<T> {
-  const client = await publicPool.connect()
-  
-  try {
-    await client.query('BEGIN')
-    const result = await callback(client)
-    await client.query('COMMIT')
-    return result
-  } catch (error) {
-    await client.query('ROLLBACK')
-    console.log('Database', 'transactionPublic', 'Transaction failed and rolled back', undefined, { error })
-    throw error
-  } finally {
-    client.release()
-  }
+  return executeTransaction(publicPool, 'public', 'transactionPublic', callback)
+}
+
+export async function transactionConsent<T>(
+  callback: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  return executeTransaction(consentPool, 'consent, public', 'transactionConsent', callback)
+}
+
+export async function transactionJobs<T>(
+  callback: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  return executeTransaction(jobsPool, 'jobs, public', 'transactionJobs', callback)
+}
+
+export async function transactionNetwork<T>(
+  callback: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  return executeTransaction(networkPool, 'network, graph, public, "next-auth"', 'transactionNetwork', callback)
+}
+
+export async function transactionInstances<T>(
+  callback: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  return executeTransaction(instancesPool, 'instances, public', 'transactionInstances', callback)
+}
+
+export async function transactionGraph<T>(
+  callback: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  return executeTransaction(graphPool, 'graph, consent, network, public, "next-auth"', 'transactionGraph', callback)
+}
+
+export async function transactionCache<T>(
+  callback: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  return executeTransaction(cachePool, 'cache, public', 'transactionCache', callback)
 }
 
 // Fonction pour fermer les pools (utile pour les tests et le shutdown)
@@ -207,6 +394,30 @@ export async function closePools(): Promise<void> {
     await globalThis.__publicPool.end()
     globalThis.__publicPool = undefined
   }
+  if (globalThis.__consentPool) {
+    await globalThis.__consentPool.end()
+    globalThis.__consentPool = undefined
+  }
+  if (globalThis.__jobsPool) {
+    await globalThis.__jobsPool.end()
+    globalThis.__jobsPool = undefined
+  }
+  if (globalThis.__networkPool) {
+    await globalThis.__networkPool.end()
+    globalThis.__networkPool = undefined
+  }
+  if (globalThis.__instancesPool) {
+    await globalThis.__instancesPool.end()
+    globalThis.__instancesPool = undefined
+  }
+  if (globalThis.__graphPool) {
+    await globalThis.__graphPool.end()
+    globalThis.__graphPool = undefined
+  }
+  if (globalThis.__cachePool) {
+    await globalThis.__cachePool.end()
+    globalThis.__cachePool = undefined
+  }
   console.log('Database', 'closePools', 'All database pools closed')
 }
 
@@ -215,10 +426,16 @@ export async function checkConnection(): Promise<boolean> {
   try {
     await queryNextAuth('SELECT 1')
     await queryPublic('SELECT 1')
-   console.log('Database', 'checkConnection', 'Database connection successful')
+    await queryConsent('SELECT 1')
+    await queryJobs('SELECT 1')
+    await queryNetwork('SELECT 1')
+    await queryInstances('SELECT 1')
+    await queryGraph('SELECT 1')
+    await queryCache('SELECT 1')
+    console.log('Database', 'checkConnection', 'Database connection successful')
     return true
   } catch (error) {
- console.log('Database', 'checkConnection', 'Database connection failed', undefined, { error })
+    console.log('Database', 'checkConnection', 'Database connection failed', undefined, { error })
     return false
   }
 }

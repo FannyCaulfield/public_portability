@@ -6,7 +6,7 @@ import { withValidation } from '@/lib/validation/middleware';
 import { z } from 'zod';
 import { secureFileContentExtended, type FileContentData } from '@/lib/security-utils';
 import { redis } from '@/lib/redis';
-import { pgImportJobsRepository } from '@/lib/repositories/public/pg-import-jobs-repository'
+import { pgImportJobsRepository } from '@/lib/repositories/jobs/pg-import-jobs-repository'
 
 // Répertoire temporaire pour les uploads - doit être accessible aux workers
 const TEMP_UPLOAD_DIR = process.env.TEMP_UPLOAD_DIR || '/app/tmp';

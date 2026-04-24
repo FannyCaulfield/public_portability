@@ -5,6 +5,7 @@ import type {
   ConsentChangePayload,
   MastodonCacheInvalidationPayload,
   GlobalStatsCacheInvalidationPayload,
+  NetworkSyncJobsPayload,
   SyncRedisMappingPayload,
   UserStatsCacheInvalidationPayload,
 } from './types';
@@ -13,6 +14,7 @@ import { handleNodeTypeChange } from './handlers/node-type';
 import { handleMastodonCacheInvalidation } from './handlers/mastodon-cache';
 import { handleUserStatsCacheInvalidation } from './handlers/user-stats-cache';
 import { handleGlobalStatsCacheInvalidation } from './handlers/global-stats-cache';
+import { handleNetworkSyncJobs } from './handlers/network-sync-jobs';
 import { handleSyncRedisMapping } from './handlers/sync-redis-mapping';
 
 export async function dispatchPgNotification(channel: string, payload: string): Promise<void> {
@@ -44,6 +46,10 @@ export async function dispatchPgNotification(channel: string, payload: string): 
 
       case PG_NOTIFY_CHANNELS.GLOBAL_STATS_CACHE_INVALIDATION:
         await handleGlobalStatsCacheInvalidation(parsed as GlobalStatsCacheInvalidationPayload);
+        break;
+
+      case PG_NOTIFY_CHANNELS.NETWORK_SYNC_JOBS:
+        await handleNetworkSyncJobs(parsed as NetworkSyncJobsPayload);
         break;
 
       case PG_NOTIFY_CHANNELS.SYNC_REDIS_MAPPING:

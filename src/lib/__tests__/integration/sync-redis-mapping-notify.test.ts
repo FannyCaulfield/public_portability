@@ -47,6 +47,8 @@ describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)'
 
   const testUserId = `00000000-0000-0000-0000-${String(Date.now()).slice(-12).padStart(12, '0')}`;
   const twitterId = String(900000000000 + (Date.now() % 100000000000));
+  let blueskySocialAccountId: string | null = null;
+  let mastodonSocialAccountId: string | null = null;
 
   beforeAll(async () => {
     if (!process.env.REDIS_PASSWORD) {
@@ -74,10 +76,25 @@ describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)'
 
     // Create user with required fields
     await pg.query(
-      `INSERT INTO "next-auth".users (id, name, created_at, updated_at, has_onboarded, hqx_newsletter, oep_accepted, research_accepted, have_seen_newsletter, automatic_reconnect, twitter_id, twitter_username)
-       VALUES ($1, $2, now(), now(), false, false, false, false, false, false, $3::bigint, $4)
+      `INSERT INTO "next-auth".users (id, name, email, created_at, updated_at, has_onboarded, hqx_newsletter, oep_accepted, research_accepted, have_seen_newsletter, automatic_reconnect)
+       VALUES ($1, $2, $3, now(), now(), false, false, false, false, false, false)
        ON CONFLICT (id) DO NOTHING`,
-      [testUserId, 'test-sync-redis-mapping', twitterId, `test_${twitterId}`]
+      [testUserId, 'test-sync-redis-mapping', `test-${twitterId}@example.com`]
+    );
+
+    await pg.query(
+      `INSERT INTO "next-auth".social_accounts (
+         user_id,
+         provider,
+         provider_account_id,
+         username,
+         instance,
+         email,
+         is_primary,
+         last_seen_at
+       )
+       VALUES ($1, 'twitter', $2, $3, '', $4, true, now())`,
+      [testUserId, twitterId, `test_${twitterId}`, `test-${twitterId}@example.com`]
     );
   });
 
@@ -97,26 +114,36 @@ describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)'
   it('should upsert/delete bluesky mapping in Redis when next-auth.users changes', async () => {
     const key = `twitter_to_bluesky:${twitterId}`;
 
-    // Set bluesky fields (should upsert)
-    await pg.query(
-      `UPDATE "next-auth".users
-       SET bluesky_id = $2, bluesky_username = $3, updated_at = now()
-       WHERE id = $1`,
-      [testUserId, `did:plc:${twitterId}`, `bsky_${twitterId}`]
+    // Insert bluesky social account (should upsert)
+    const blueskyInsert = await pg.query(
+      `INSERT INTO "next-auth".social_accounts (
+         user_id,
+         provider,
+         provider_account_id,
+         username,
+         instance,
+         email,
+         is_primary,
+         last_seen_at
+       )
+       VALUES ($1, 'bluesky', $2, $3, '', $4, true, now())
+       RETURNING id`,
+      [testUserId, `did:plc:${twitterId}`, `bsky_${twitterId}`, `test-${twitterId}@example.com`]
     );
+    blueskySocialAccountId = blueskyInsert.rows[0]?.id ?? null;
 
     await waitForCondition(async () => {
       const val = await redis.get(key);
       return val === `bsky_${twitterId}`;
     }, 8000, 200);
 
-    // Clear bluesky_id (should delete)
+    // Delete bluesky social account (should delete)
     await pg.query(
-      `UPDATE "next-auth".users
-       SET bluesky_id = NULL, bluesky_username = NULL, updated_at = now()
+      `DELETE FROM "next-auth".social_accounts
        WHERE id = $1`,
-      [testUserId]
+      [blueskySocialAccountId]
     );
+    blueskySocialAccountId = null;
 
     await waitForCondition(async () => {
       const val = await redis.get(key);
@@ -127,13 +154,23 @@ describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)'
   it('should upsert/delete mastodon mapping in Redis when next-auth.users changes', async () => {
     const key = `twitter_to_mastodon:${twitterId}`;
 
-    // Set mastodon fields (should upsert)
-    await pg.query(
-      `UPDATE "next-auth".users
-       SET mastodon_id = $2, mastodon_username = $3, mastodon_instance = $4, updated_at = now()
-       WHERE id = $1`,
-      [testUserId, `mastodon_${twitterId}`, `m_${twitterId}`, 'example.social']
+    // Insert mastodon social account (should upsert)
+    const mastodonInsert = await pg.query(
+      `INSERT INTO "next-auth".social_accounts (
+         user_id,
+         provider,
+         provider_account_id,
+         username,
+         instance,
+         email,
+         is_primary,
+         last_seen_at
+       )
+       VALUES ($1, 'mastodon', $2, $3, $4, $5, true, now())
+       RETURNING id`,
+      [testUserId, `mastodon_${twitterId}`, `m_${twitterId}`, 'example.social', `test-${twitterId}@example.com`]
     );
+    mastodonSocialAccountId = mastodonInsert.rows[0]?.id ?? null;
 
     await waitForCondition(async () => {
       const val = await redis.get(key);
@@ -146,13 +183,13 @@ describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)'
       }
     }, 8000, 200);
 
-    // Clear mastodon_id (should delete)
+    // Delete mastodon social account (should delete)
     await pg.query(
-      `UPDATE "next-auth".users
-       SET mastodon_id = NULL, mastodon_username = NULL, mastodon_instance = NULL, updated_at = now()
+      `DELETE FROM "next-auth".social_accounts
        WHERE id = $1`,
-      [testUserId]
+      [mastodonSocialAccountId]
     );
+    mastodonSocialAccountId = null;
 
     await waitForCondition(async () => {
       const val = await redis.get(key);
@@ -164,7 +201,7 @@ describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)'
     const result = await pg.query(`
       SELECT tgname
       FROM pg_trigger
-      WHERE tgrelid = '"next-auth".users'::regclass
+      WHERE tgrelid = '"next-auth".social_accounts'::regclass
         AND tgname IN ('sync_twitter_bluesky_users_trigger', 'sync_twitter_mastodon_users_trigger')
     `);
 

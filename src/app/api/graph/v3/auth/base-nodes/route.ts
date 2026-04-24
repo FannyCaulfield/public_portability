@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withValidation } from '@/lib/validation/middleware';
-import { pgMatchingRepository } from '@/lib/repositories/public/pg-matching-repository';
-import { pgGraphNodesRepository } from '@/lib/repositories/public/pg-graph-nodes-repository';
+import { pgMatchingRepository } from '@/lib/repositories/network/pg-matching-repository';
+import { pgGraphNodesRepository } from '@/lib/repositories/graph/pg-graph-nodes-repository';
 import logger from '@/lib/log_utils';
 import { z } from 'zod';
 

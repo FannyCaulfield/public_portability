@@ -2,6 +2,19 @@ import { queryNextAuth } from '../../database'
 import type { DBSession, DBUser } from '../../types/database'
 import logger from '../../log_utils'
 
+type SessionUserWithDerivedSocialFields = DBUser & {
+  twitter_id?: string | null
+  twitter_username?: string | null
+  twitter_image?: string | null
+  bluesky_id?: string | null
+  bluesky_username?: string | null
+  bluesky_image?: string | null
+  mastodon_id?: string | null
+  mastodon_username?: string | null
+  mastodon_image?: string | null
+  mastodon_instance?: string | null
+}
+
 /**
  * Repository pour les opérations sur les sessions (schéma next-auth)
  */
@@ -28,7 +41,7 @@ export const pgSessionRepository = {
   /**
    * Récupère une session avec l'utilisateur associé
    */
-  async getSessionAndUser(sessionToken: string): Promise<{ session: DBSession; user: DBUser } | null> {
+  async getSessionAndUser(sessionToken: string): Promise<{ session: DBSession; user: SessionUserWithDerivedSocialFields } | null> {
     try {
       const result = await queryNextAuth<any>(
         `SELECT 
@@ -50,20 +63,26 @@ export const pgSessionRepository = {
           u.have_seen_v2,
           u.research_accepted,
           u.automatic_reconnect,
-          u.twitter_id,
-          u.twitter_username,
-          u.twitter_image,
-          u.bluesky_id,
-          u.bluesky_username,
-          u.bluesky_image,
-          u.mastodon_id,
-          u.mastodon_username,
-          u.mastodon_image,
-          u.mastodon_instance,
+          twitter.provider_account_id as twitter_id,
+          twitter.username as twitter_username,
+          bluesky.provider_account_id as bluesky_id,
+          bluesky.username as bluesky_username,
+          mastodon.provider_account_id as mastodon_id,
+          mastodon.username as mastodon_username,
+          mastodon.instance as mastodon_instance,
           u.created_at as user_created_at,
           u.updated_at as user_updated_at
         FROM sessions s
         INNER JOIN users u ON s.user_id = u.id
+        LEFT JOIN "next-auth".social_accounts twitter
+          ON twitter.user_id = u.id
+         AND twitter.provider = 'twitter'
+        LEFT JOIN "next-auth".social_accounts bluesky
+          ON bluesky.user_id = u.id
+         AND bluesky.provider = 'bluesky'
+        LEFT JOIN "next-auth".social_accounts mastodon
+          ON mastodon.user_id = u.id
+         AND mastodon.provider = 'mastodon'
         WHERE s.session_token = $1`,
         [sessionToken]
       )
@@ -98,13 +117,13 @@ export const pgSessionRepository = {
           automatic_reconnect: row.automatic_reconnect,
           twitter_id: row.twitter_id,
           twitter_username: row.twitter_username,
-          twitter_image: row.twitter_image,
+          twitter_image: null,
           bluesky_id: row.bluesky_id,
           bluesky_username: row.bluesky_username,
-          bluesky_image: row.bluesky_image,
+          bluesky_image: null,
           mastodon_id: row.mastodon_id,
           mastodon_username: row.mastodon_username,
-          mastodon_image: row.mastodon_image,
+          mastodon_image: null,
           mastodon_instance: row.mastodon_instance,
           created_at: row.user_created_at,
           updated_at: row.user_updated_at,

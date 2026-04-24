@@ -9,6 +9,8 @@ declare global {
   var __pgNotifyClient: Client | undefined;
   // eslint-disable-next-line no-var
   var __pgNotifyListenerStarted: boolean | undefined;
+  // eslint-disable-next-line no-var
+  var __pgNotifyDispatchChain: Promise<void> | undefined;
 }
 
 /**
@@ -16,9 +18,12 @@ declare global {
  * LISTEN/NOTIFY requires a persistent connection, not pooled
  */
 function getDirectPgConfig() {
+  const host = process.env.POSTGRES_DIRECT_HOST || process.env.POSTGRES_HOST || 'localhost';
+  const port = parseInt(process.env.POSTGRES_DIRECT_PORT || process.env.POSTGRES_PORT || '5432');
+
   return {
-    host: process.env.POSTGRES_HOST || 'postgres',
-    port: parseInt(process.env.POSTGRES_DIRECT_PORT || '5432'),
+    host,
+    port,
     database: process.env.POSTGRES_DB || 'nexus',
     user: process.env.POSTGRES_USER || 'postgres',
     password: process.env.POSTGRES_PASSWORD || 'mysecretpassword',
@@ -57,7 +62,12 @@ export async function startPgNotifyListener(): Promise<boolean> {
 
     client.on('notification', (msg: { channel: string; payload?: string }) => {
       if (msg.channel && msg.payload) {
-        dispatchPgNotification(msg.channel, msg.payload);
+        const chain = globalThis.__pgNotifyDispatchChain ?? Promise.resolve()
+        globalThis.__pgNotifyDispatchChain = chain
+          .then(() => dispatchPgNotification(msg.channel, msg.payload!))
+          .catch((error) => {
+            logger.logError('PgNotify', 'Failed to process queued notification', error instanceof Error ? error.message : String(error), 'system')
+          })
       }
     });
 
@@ -96,6 +106,7 @@ export async function stopPgNotifyListener(): Promise<void> {
     } finally {
       globalThis.__pgNotifyClient = undefined;
       globalThis.__pgNotifyListenerStarted = false;
+      globalThis.__pgNotifyDispatchChain = undefined;
     }
   }
 }

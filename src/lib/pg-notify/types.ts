@@ -32,6 +32,16 @@ export interface GlobalStatsCacheInvalidationPayload {
   timestamp?: number;
 }
 
+export interface NetworkSyncJobsPayload {
+  job_id: number | string;
+  user_id: string;
+  provider: 'bluesky' | 'mastodon';
+  scope: 'followers' | 'followings' | 'full_sync';
+  status: 'pending' | 'retrying' | string;
+  dedupe_key?: string;
+  timestamp?: number;
+}
+
 export interface SyncRedisMappingPayload {
   action: 'upsert' | 'delete';
   platform: 'bluesky' | 'mastodon';

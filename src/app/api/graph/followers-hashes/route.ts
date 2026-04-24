@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { pgMatchingRepository } from '@/lib/repositories/public/pg-matching-repository';
+import { pgMatchingRepository } from '@/lib/repositories/network/pg-matching-repository';
 import { withValidation } from "@/lib/validation/middleware"
 import { z } from "zod"
 

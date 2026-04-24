@@ -2,8 +2,12 @@
 import logger from '@/lib/log_utils'
 import { withValidation } from "@/lib/validation/middleware"
 import { z } from "zod"
-import { pgUserRepository } from '@/lib/repositories/auth/pg-user-repository'
 import { pgAccountRepository } from '@/lib/repositories/auth/pg-account-repository'
+import { pgSocialAccountRepository } from '@/lib/repositories/auth/pg-social-account-repository'
+import {
+  cancelQueuedNetworkSyncJobs,
+  deleteNetworkEdgesByUserId,
+} from '@/lib/repositories/jobs/networkCleanupRepository'
 
 // Classe d'erreur pour la déliaison de compte (interne au module)
 class UnlinkError extends Error {
@@ -28,6 +32,8 @@ const UnlinkSchema = z.object({
 // Type pour les données validées
 type UnlinkRequest = z.infer<typeof UnlinkSchema>
 
+type UnlinkProvider = 'twitter' | 'bluesky' | 'mastodon'
+
 async function unlinkHandler(_req: Request, data: UnlinkRequest, session: any) {
   try {
     if (!session?.user?.id) {
@@ -36,18 +42,13 @@ async function unlinkHandler(_req: Request, data: UnlinkRequest, session: any) {
     }
     
     const userId = session.user.id
-    const { provider } = data
-    
-    // Récupérer l'utilisateur pour vérifier les comptes liés
-    const user = await pgUserRepository.getUser(userId)
-    if (!user) {
-      logger.logError('API', 'POST /api/auth/unlink', 'Error fetching user', userId, { provider })
-      throw new UnlinkError("User not found", "NOT_FOUND", 404)
-    }
+    const provider = data.provider as UnlinkProvider
+
+    const socialAccounts = await pgSocialAccountRepository.getSocialAccountsByUserId(userId)
+    const matchingSocialAccount = socialAccounts.find((account) => account.provider === provider)
     
     // Vérifier si le compte est lié (type-safe)
-    const providerIdPresent = provider === 'twitter' ? user.twitter_id : provider === 'bluesky' ? user.bluesky_id : user.mastodon_id
-    if (!providerIdPresent) {
+    if (!matchingSocialAccount?.provider_account_id) {
       logger.logWarning('API', 'POST /api/auth/unlink', 'Account not found for provider', userId, { provider })
       return NextResponse.json({ 
         error: 'Account not found', 
@@ -56,19 +57,33 @@ async function unlinkHandler(_req: Request, data: UnlinkRequest, session: any) {
     }
     
     // Vérifier si c'est le dernier compte lié
-    const linkedProviders = [
-      user.twitter_id,
-      user.bluesky_id,
-      user.mastodon_id,
-    ].filter(Boolean).length
+    const linkedProviders = socialAccounts.length
     
     if (linkedProviders <= 1) {
       logger.logWarning('API', 'POST /api/auth/unlink', 'Cannot unlink last account', userId, { provider })
       throw new UnlinkError("Cannot unlink last account", "LAST_ACCOUNT", 400)
     }
+
+    try {
+      if (provider === 'bluesky') {
+        await cancelQueuedNetworkSyncJobs(userId, 'bluesky')
+        await deleteNetworkEdgesByUserId(userId, 'bluesky')
+      }
+
+      if (provider === 'mastodon') {
+        await cancelQueuedNetworkSyncJobs(userId, 'mastodon')
+        await deleteNetworkEdgesByUserId(userId, 'mastodon')
+      }
+    } catch (cleanupErr) {
+      logger.logError('API', 'POST /api/auth/unlink', 'Error cleaning network sync data during unlink', userId, {
+        provider,
+        error: cleanupErr,
+      })
+      throw new UnlinkError("Database error", "DATABASE_ERROR", 500)
+    }
     
     // Vérifier si c'est une instance Piaille pour Mastodon
-    const isPiaille = provider === 'mastodon' && user.mastodon_instance === 'piaille.fr'
+    const isPiaille = provider === 'mastodon' && matchingSocialAccount.instance === 'piaille.fr'
     
     // Supprimer le compte de la table accounts (via repo)
     try {
@@ -77,29 +92,15 @@ async function unlinkHandler(_req: Request, data: UnlinkRequest, session: any) {
       if (account) {
         await pgAccountRepository.deleteAccount(providerForAccounts, account.provider_account_id)
       }
+      await pgSocialAccountRepository.deleteSocialAccount(
+        userId,
+        provider,
+        matchingSocialAccount.provider_account_id,
+        matchingSocialAccount.instance
+      )
     } catch (deleteErr) {
       logger.logError('API', 'POST /api/auth/unlink', 'Error deleting account', userId, { provider, error: deleteErr })
       // Continuer même en cas d'erreur car le compte peut ne pas exister dans accounts
-    }
-    
-    // Mettre à jour les champs dans la table users
-    const dbProvider = provider
-    const updates: any = {
-      [`${dbProvider}_id`]: null,
-      [`${dbProvider}_username`]: null,
-      [`${dbProvider}_image`]: null
-    }
-    
-    if (dbProvider === 'mastodon') {
-      updates.mastodon_instance = null
-    }
-    
-    // Mettre à jour l'utilisateur (via repo)
-    try {
-      await pgUserRepository.updateUser(userId, updates)
-    } catch (updateErr) {
-      logger.logError('API', 'POST /api/auth/unlink', 'Error updating user', userId, { provider, error: updateErr })
-      throw new UnlinkError("Database error", "DATABASE_ERROR", 500)
     }
     
     return NextResponse.json({ success: true })

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth, signIn } from "@/app/auth"
 import { createBlueskyOAuthClient } from "@/lib/services/blueskyOAuthClient"
-import { pgBlueskyRepository } from "@/lib/repositories/public/pg-bluesky-repository"
+import { pgBlueskyRepository } from "@/lib/repositories/auth/pg-bluesky-repository"
 import { pgUserRepository } from "@/lib/repositories/auth/pg-user-repository"
 import { pgAccountRepository } from "@/lib/repositories/auth/pg-account-repository"
+import { pgSocialAccountRepository } from "@/lib/repositories/auth/pg-social-account-repository"
 import { BlueskyService } from "@/lib/services/blueskyServices"
 import { withPublicValidation } from "@/lib/validation/middleware"
 import { z } from "zod"
@@ -203,6 +204,16 @@ async function callbackHandler(request: NextRequest) {
     if (existingUser) {
       userId = existingUser.id
       await pgBlueskyRepository.updateBlueskyProfile(userId, profile)
+      await pgSocialAccountRepository.upsertSocialAccount({
+        user_id: userId,
+        provider: 'bluesky',
+        provider_account_id: did,
+        username: profile.handle ?? did,
+        instance: '',
+        email: null,
+        is_primary: true,
+        last_seen_at: new Date(),
+      })
 
       if (accessToken && refreshToken) {
         await pgAccountRepository.upsertAccount({
@@ -220,6 +231,16 @@ async function callbackHandler(request: NextRequest) {
       }
     } else if (userId) {
       await pgBlueskyRepository.updateBlueskyProfile(userId, profile)
+      await pgSocialAccountRepository.upsertSocialAccount({
+        user_id: userId,
+        provider: 'bluesky',
+        provider_account_id: did,
+        username: profile.handle ?? did,
+        instance: '',
+        email: null,
+        is_primary: true,
+        last_seen_at: new Date(),
+      })
 
       if (accessToken && refreshToken) {
         await pgAccountRepository.upsertAccount({
@@ -239,11 +260,18 @@ async function callbackHandler(request: NextRequest) {
       const newUser = await pgUserRepository.createUser({
         name: profile.displayName || profile.handle,
         email: null,
-        bluesky_id: profile.did,
-        bluesky_username: profile.handle,
-        bluesky_image: profile.avatar,
       })
       userId = newUser.id
+      await pgSocialAccountRepository.upsertSocialAccount({
+        user_id: userId,
+        provider: 'bluesky',
+        provider_account_id: did,
+        username: profile.handle ?? did,
+        instance: '',
+        email: null,
+        is_primary: true,
+        last_seen_at: new Date(),
+      })
 
       if (accessToken && refreshToken) {
         await pgAccountRepository.upsertAccount({
@@ -271,9 +299,6 @@ async function callbackHandler(request: NextRequest) {
         displayName: profile.displayName,
         avatar: profile.avatar,
       },
-      bluesky_id: profile.did,
-      bluesky_username: profile.handle,
-      bluesky_image: profile.avatar,
       has_onboarded: false,
       hqx_newsletter: false,
       oep_accepted: false,

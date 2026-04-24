@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { pgGraphNodesRepository } from '@/lib/repositories/public/pg-graph-nodes-repository';
-import { pgMatchingRepository } from '@/lib/repositories/public/pg-matching-repository';
+import { pgGraphNodesRepository } from '@/lib/repositories/graph/pg-graph-nodes-repository';
+import { pgMatchingRepository } from '@/lib/repositories/network/pg-matching-repository';
 import { redisMatchingRepository } from '@/lib/repositories/redis-matching-repository';
 import logger from '@/lib/log_utils';
 import { withValidation } from "@/lib/validation/middleware"
