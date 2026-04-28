@@ -193,9 +193,32 @@ export const authConfig = {
           }
         }
 
-        const targetUserId = session?.user?.id || (typeof user?.id === 'string' ? user.id : undefined)
+        let targetUserId = typeof user?.id === 'string' ? user.id : session?.user?.id
 
-        if (targetUserId && (account.provider === 'bluesky' || account.provider === 'mastodon')) {
+        if (account.provider === 'bluesky' && typeof account.providerAccountId === 'string' && account.providerAccountId.startsWith('did:')) {
+          try {
+            const { pgUserRepository } = await import('@/lib/repositories/auth/pg-user-repository');
+            const canonicalUser = await pgUserRepository.getUserByProviderId('bluesky', account.providerAccountId);
+            if (canonicalUser?.id) {
+              targetUserId = canonicalUser.id;
+            }
+          } catch (error) {
+            logger.logError('Auth', 'signIn.enqueueNetworkSyncJob', 'Failed to resolve canonical Bluesky user before enqueue', targetUserId, {
+              provider: account.provider,
+              providerAccountId: account.providerAccountId,
+              error,
+            });
+          }
+        }
+
+        if (targetUserId && account.provider === 'bluesky') {
+          logger.logInfo('Auth', 'signIn.enqueueNetworkSyncJob', 'Preparing network sync job enqueue', targetUserId, {
+            provider: account.provider,
+            sessionUserId: session?.user?.id ?? null,
+            callbackUserId: typeof user?.id === 'string' ? user.id : null,
+            chosenTargetUserId: targetUserId,
+          })
+
           // Best-effort enqueue: never block sign-in on job queueing failure.
           void enqueueNetworkSyncJobBestEffort(targetUserId, account.provider)
         }
@@ -249,6 +272,35 @@ export const authConfig = {
               provider: 'mastodon',
               profile: profile
             })
+
+            try {
+              const { pgUserRepository } = await import('@/lib/repositories/auth/pg-user-repository');
+              const canonicalUser = await pgUserRepository.getUserByProviderId('mastodon', profile.id, instance);
+              const targetUserId = canonicalUser?.id || token.id || (typeof user?.id === 'string' ? user.id : '');
+
+              if (canonicalUser?.id && token.id !== canonicalUser.id) {
+                token.id = canonicalUser.id
+              }
+
+              if (targetUserId) {
+                logger.logInfo('Auth', 'jwt.enqueueNetworkSyncJob', 'Preparing Mastodon network sync job enqueue after profile persistence', targetUserId, {
+                  provider: account.provider,
+                  tokenUserId: token.id || null,
+                  callbackUserId: typeof user?.id === 'string' ? user.id : null,
+                  canonicalUserId: canonicalUser?.id ?? null,
+                  providerAccountId: profile.id,
+                  instance: instance ?? null,
+                })
+                await enqueueNetworkSyncJobBestEffort(targetUserId, 'mastodon')
+              }
+            } catch (error) {
+              logger.logError('Auth', 'jwt.enqueueNetworkSyncJob', 'Failed to enqueue Mastodon network sync job after profile persistence', token.id || '', {
+                provider: account.provider,
+                providerAccountId: profile.id,
+                instance: instance ?? null,
+                error,
+              })
+            }
             
             token.mastodon_id = profile.id
             token.mastodon_username = profile.username
