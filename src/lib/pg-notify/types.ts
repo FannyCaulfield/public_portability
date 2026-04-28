@@ -15,6 +15,22 @@ export interface ConsentChangePayload {
   timestamp: number;
 }
 
+export interface ConsentProcessingNotifyPayload {
+  operation: 'INSERT' | 'UPDATE';
+  user_id: string;
+  consent_type: 'bluesky_dm' | 'mastodon_dm' | 'email_newsletter' | 'oep_newsletter' | 'research_participation';
+  consent_value: boolean;
+  old_consent_value?: boolean | null;
+  handle?: string | null;
+  metadata?: {
+    userAgent?: string | null;
+    ip?: string | null;
+    trigger_operation: 'INSERT' | 'UPDATE';
+    timestamp: string;
+  };
+  timestamp?: number;
+}
+
 export interface MastodonCacheInvalidationPayload {
   operation?: string;
   timestamp?: number;

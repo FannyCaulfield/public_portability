@@ -3,6 +3,7 @@ import { PG_NOTIFY_CHANNELS, type PgNotifyChannel } from './channels';
 import type {
   CacheInvalidationPayload,
   ConsentChangePayload,
+  ConsentProcessingNotifyPayload,
   MastodonCacheInvalidationPayload,
   GlobalStatsCacheInvalidationPayload,
   NetworkSyncJobsPayload,
@@ -10,6 +11,7 @@ import type {
   UserStatsCacheInvalidationPayload,
 } from './types';
 import { handleCacheInvalidation, handleConsentChange } from './handlers/cache-invalidation';
+import { handleConsentProcessing } from './handlers/consent-processing';
 import { handleNodeTypeChange } from './handlers/node-type';
 import { handleMastodonCacheInvalidation } from './handlers/mastodon-cache';
 import { handleUserStatsCacheInvalidation } from './handlers/user-stats-cache';
@@ -30,6 +32,10 @@ export async function dispatchPgNotification(channel: string, payload: string): 
 
       case PG_NOTIFY_CHANNELS.CONSENT_CHANGE:
         await handleConsentChange(parsed as ConsentChangePayload);
+        break;
+
+      case PG_NOTIFY_CHANNELS.CONSENT_PROCESSING:
+        await handleConsentProcessing(parsed as ConsentProcessingNotifyPayload);
         break;
 
       case PG_NOTIFY_CHANNELS.NODE_TYPE_CHANGE:

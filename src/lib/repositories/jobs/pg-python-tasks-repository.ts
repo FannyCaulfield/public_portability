@@ -30,7 +30,7 @@ export const pgPythonTasksRepository = {
     try {
       const res = await queryJobs<PythonTaskRow>(
         `SELECT id, user_id, task_type, platform, payload, created_at, updated_at, status
-         FROM python_tasks
+         FROM jobs.python_tasks
          WHERE user_id = $1
            AND platform = $2
            AND status = 'pending'
@@ -58,7 +58,7 @@ export const pgPythonTasksRepository = {
     try {
       const res = await queryJobs<PythonTaskRow>(
         `SELECT id, user_id, task_type, platform, payload, created_at, updated_at, status
-         FROM python_tasks
+         FROM jobs.python_tasks
          WHERE status = ANY($1)
            AND created_at >= $2
            AND created_at < $3`,
@@ -79,7 +79,7 @@ export const pgPythonTasksRepository = {
     try {
       const res = await queryJobs<{ exists: boolean }>(
         `SELECT EXISTS (
-           SELECT 1 FROM python_tasks 
+           SELECT 1 FROM jobs.python_tasks 
            WHERE user_id = $1 AND platform = $2 AND task_type = $3 AND status = 'pending'
          ) as exists`,
         [userId, platform, taskType]
@@ -99,7 +99,7 @@ export const pgPythonTasksRepository = {
   ): Promise<string> {
     try {
       const res = await queryJobs<{ id: string }>(
-        `INSERT INTO python_tasks (user_id, status, task_type, platform, payload)
+        `INSERT INTO jobs.python_tasks (user_id, status, task_type, platform, payload)
          VALUES ($1, 'pending', $2, $3, $4::jsonb)
          RETURNING id`,
         [userId, taskType, platform, JSON.stringify(payload)]
@@ -119,7 +119,7 @@ export const pgPythonTasksRepository = {
     try {
       const res = await queryJobs<{ exists: boolean }>(
         `SELECT EXISTS (
-           SELECT 1 FROM python_tasks 
+           SELECT 1 FROM jobs.python_tasks 
            WHERE user_id = $1 AND platform = $2 AND task_type = $3 AND status = 'waiting'
          ) as exists`,
         [userId, platform, taskType]
@@ -138,7 +138,7 @@ export const pgPythonTasksRepository = {
   ): Promise<string> {
     try {
       const res = await queryJobs<{ id: string }>(
-        `INSERT INTO python_tasks (user_id, status, task_type, platform)
+        `INSERT INTO jobs.python_tasks (user_id, status, task_type, platform)
          VALUES ($1, 'waiting', $2, $3)
          RETURNING id`,
         [userId, taskType, platform]
@@ -157,7 +157,7 @@ export const pgPythonTasksRepository = {
   ): Promise<void> {
     try {
       await queryJobs(
-        `DELETE FROM python_tasks WHERE user_id = $1 AND platform = $2 AND status = ANY($3)`,
+        `DELETE FROM jobs.python_tasks WHERE user_id = $1 AND platform = $2 AND status = ANY($3)`,
         [userId, platform, statuses]
       )
     } catch (error) {

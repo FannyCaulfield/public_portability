@@ -2,6 +2,7 @@
 export const PG_NOTIFY_CHANNELS = {
   CACHE_INVALIDATION: 'cache_invalidation',
   CONSENT_CHANGE: 'consent_change',
+  CONSENT_PROCESSING: 'consent_processing',
   NODE_TYPE_CHANGE: 'node_type_change',
   MASTODON_CACHE_INVALIDATION: 'mastodon_cache_invalidation',
   USER_STATS_CACHE_INVALIDATION: 'user_stats_cache_invalidation',
