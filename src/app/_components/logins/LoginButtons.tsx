@@ -11,7 +11,7 @@ import { useMastodonInstances } from '@/hooks/useMastodonInstances'
 import { useTheme } from '@/hooks/useTheme'
 import { Sparkles, ShieldCheck } from 'lucide-react'
 
-type ActiveService = 'bluesky' | 'mastodon' | 'twitter' | null;
+type ActiveService = 'bluesky' | 'mastodon' | 'fediverse' | 'twitter' | null;
 
 interface LoginButtonsProps {
   onLoadingChange: (isLoading: boolean) => void;
@@ -94,6 +94,14 @@ export default function LoginButtons({ onLoadingChange, onError, userId }: Login
             instances={mastodonInstances}
             onClick={() => handleServiceSelect('mastodon')}
           />
+
+          <FediverseLoginButton
+            onLoadingChange={onLoadingChange}
+            className={quantico.className}
+            isSelected={activeService === 'fediverse'}
+            onClick={() => handleServiceSelect('fediverse')}
+            userId={userId}
+          />
         </motion.div>
 
         {/* Expanded forms */}
@@ -131,6 +139,25 @@ export default function LoginButtons({ onLoadingChange, onError, userId }: Login
                   showForm={true}
                   instances={mastodonInstances}
                   onError={handleError}
+                />
+              </div>
+            </motion.div>
+          )}
+
+          {activeService === 'fediverse' && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="overflow-hidden"
+            >
+              <div className={`rounded-2xl border p-4 ${isDark ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-white'}`}>
+                <FediverseLoginButton
+                  onLoadingChange={onLoadingChange}
+                  className={quantico.className}
+                  showForm={true}
+                  onError={handleError}
+                  userId={userId}
                 />
               </div>
             </motion.div>

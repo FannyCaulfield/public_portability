@@ -47,6 +47,18 @@ async function enqueueNetworkSyncJobBestEffort(userId: string, provider: Network
   }
 }
 
+function getEnqueuedNetworkProvider(provider: string): NetworkProvider | null {
+  if (provider === 'fediverse') {
+    return 'mastodon'
+  }
+
+  if (provider === 'bluesky' || provider === 'mastodon' || provider === 'youtube') {
+    return provider
+  }
+
+  return null
+}
+
 export const authConfig = {
   adapter: pgAdapter,
   secret: process.env.NEXTAUTH_SECRET,
@@ -211,17 +223,33 @@ export const authConfig = {
           }
         }
 
-        if (targetUserId && account.provider === 'bluesky') {
+        const enqueuedNetworkProvider = getEnqueuedNetworkProvider(account.provider)
+
+        if (targetUserId && enqueuedNetworkProvider === 'bluesky') {
           logger.logInfo('Auth', 'signIn.enqueueNetworkSyncJob', 'Preparing network sync job enqueue', targetUserId, {
-            provider: account.provider,
+            provider: enqueuedNetworkProvider,
             sessionUserId: session?.user?.id ?? null,
             callbackUserId: typeof user?.id === 'string' ? user.id : null,
             chosenTargetUserId: targetUserId,
+            sourceProvider: account.provider,
           })
 
           // Best-effort enqueue: never block sign-in on job queueing failure.
-          void enqueueNetworkSyncJobBestEffort(targetUserId, account.provider)
+          void enqueueNetworkSyncJobBestEffort(targetUserId, enqueuedNetworkProvider)
         }
+
+        if (targetUserId && enqueuedNetworkProvider === 'mastodon') {
+          logger.logInfo('Auth', 'signIn.enqueueNetworkSyncJob', 'Preparing network sync job enqueue', targetUserId, {
+            provider: enqueuedNetworkProvider,
+            sessionUserId: session?.user?.id ?? null,
+            callbackUserId: typeof user?.id === 'string' ? user.id : null,
+            chosenTargetUserId: targetUserId,
+            sourceProvider: account.provider,
+          })
+
+          void enqueueNetworkSyncJobBestEffort(targetUserId, enqueuedNetworkProvider)
+        }
+
 
         return true;
       } catch (error) {
@@ -397,6 +425,28 @@ export const authConfig = {
         }
       }
     },
+
+    {
+      id: "fediverse",
+      name: "Fediverse",
+      type: "credentials",
+      credentials: {},
+      async authorize(credentials: any): Promise<CustomAdapterUser | null> {
+        if (!credentials) {
+          logger.logError('Auth', 'fediverse.authorize', 'Missing credentials');
+          return null;
+        }
+
+        try {
+          return credentials as unknown as CustomAdapterUser;
+        } catch (error) {
+          const err = error instanceof Error ? error.message : String(error);
+          logger.logError('Auth', 'fediverse.authorize', err);
+          return null;
+        }
+      }
+    },
+
     TwitterProvider({
       clientId: process.env.TWITTER_CLIENT_ID!,
       clientSecret: process.env.TWITTER_CLIENT_SECRET!,
