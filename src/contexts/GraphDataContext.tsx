@@ -6,6 +6,7 @@ import { MatchingTarget } from '@/lib/types/matching';
 import { FollowingHashStatus } from '@/hooks/usePersonalNetwork';
 import { tableFromIPC, Table } from 'apache-arrow';
 import { useSSE, SSELabelsData, SSENodeTypesData, SSEFollowingsData } from '@/hooks/useSSE';
+import { useSession } from 'next-auth/react';
 
 // Event emitter for cross-hook communication (replaces polling)
 type GraphDataEventType = 'followingHashesUpdated' | 'followerHashesUpdated' | 'matchingDataUpdated' | 'baseNodesUpdated' | 'personalLabelsUpdated';
@@ -58,6 +59,10 @@ interface NormalizationBounds {
   centerX: number;
   centerY: number;
 }
+
+const MOBILE_INITIAL_NODES = 20_000;
+const MOBILE_MAX_WIDTH = 767;
+
 type GraphDataEventCallback = () => void;
 
 class GraphDataEventEmitter {
@@ -544,6 +549,7 @@ const graphIDB = new GraphIndexedDB();
 // Cache keys
 const CACHE_KEYS = {
   BASE_NODES: 'base_nodes',
+  BASE_NODES_MOBILE: 'base_nodes_mobile',
   PERSONAL_LABELS: 'personal_labels',
   NORMALIZATION_BOUNDS: 'normalization_bounds',
   GRAPH_NODES_VERSION: 'graph_nodes_version', // Version from Redis to detect changes
@@ -691,7 +697,7 @@ interface GraphDataProviderProps {
 }
 
 export function GraphDataProvider({ children }: GraphDataProviderProps) {
-  // Local state that syncs with global state
+  const { status } = useSession();
   const [baseNodes, setBaseNodesState] = useState<GraphNode[]>(globalGraphState.baseNodes);
   const [isBaseNodesLoaded, setIsBaseNodesLoaded] = useState(globalGraphState.baseNodesLoaded);
   const [isBaseNodesLoading, setIsBaseNodesLoading] = useState(false);
@@ -749,6 +755,7 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
   const [isTileLoading, setIsTileLoading] = useState(false);
   const [currentScale, setCurrentScale] = useState(0.025);
   const [baseNodesMinDegree, setBaseNodesMinDegree] = useState<number>(globalGraphState.baseNodesMinDegree);
+  const [isMobileInitialLoad, setIsMobileInitialLoad] = useState(false);
   
   // Ref for synchronous access to degree ceiling (avoids stale closure issues after HMR)
   const detailDegreeCeilingRef = useRef<number | null>(globalGraphState.baseNodesMinDegree || null);
@@ -775,8 +782,27 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
   });
   const tileConfig = useMemo(() => ({
     ...AUTH_TILE_CONFIG,
+    INITIAL_NODES: isMobileInitialLoad ? MOBILE_INITIAL_NODES : AUTH_TILE_CONFIG.INITIAL_NODES,
     MAX_MEMORY_NODES: maxMemoryNodes,
-  }), [maxMemoryNodes]);
+  }), [isMobileInitialLoad, maxMemoryNodes]);
+  const baseNodesCacheKey = isMobileInitialLoad ? CACHE_KEYS.BASE_NODES_MOBILE : CACHE_KEYS.BASE_NODES;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const syncViewportProfile = () => {
+      setIsMobileInitialLoad(window.innerWidth <= MOBILE_MAX_WIDTH);
+    };
+
+    syncViewportProfile();
+    window.addEventListener('resize', syncViewportProfile);
+
+    return () => {
+      window.removeEventListener('resize', syncViewportProfile);
+    };
+  }, []);
   
   // Setter for max memory nodes (exposed to UI) - persists to localStorage
   const setMaxMemoryNodes = useCallback((maxNodes: number) => {
@@ -823,6 +849,7 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
       if (cachedSchema?.data !== CACHE_SCHEMA_VERSION) {
         console.log(`💾 [IndexedDB] Cache schema changed (${cachedSchema?.data ?? 'none'} -> ${CACHE_SCHEMA_VERSION}), invalidating base caches...`);
         await graphIDB.delete(CACHE_KEYS.BASE_NODES);
+        await graphIDB.delete(CACHE_KEYS.BASE_NODES_MOBILE);
         await graphIDB.delete(CACHE_KEYS.NORMALIZATION_BOUNDS);
         await graphIDB.delete(CACHE_KEYS.DETAIL_DEGREE_CEILING);
         await graphIDB.delete(CACHE_KEYS.GRAPH_NODES_VERSION);
@@ -905,6 +932,7 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
       const { changed: versionChanged } = await checkGraphNodesVersion();
       if (versionChanged) {
         await graphIDB.delete(CACHE_KEYS.BASE_NODES);
+        await graphIDB.delete(CACHE_KEYS.BASE_NODES_MOBILE);
         globalGraphState.baseNodesLoaded = false;
         globalGraphState.baseNodes = [];
       }
@@ -940,7 +968,7 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
       // Load base nodes from cache if not already loaded
       if (!globalGraphState.baseNodesLoaded) {
         try {
-          const cached = await graphIDB.load<CachedGraphNode[]>(CACHE_KEYS.BASE_NODES);
+          const cached = await graphIDB.load<CachedGraphNode[]>(baseNodesCacheKey);
           if (cached && graphIDB.isCacheValidForNodes(cached.timestamp)) {
             const loadedNodes: GraphNode[] = cached.data.map(node => ({
               id: node.coord_hash,
@@ -1134,7 +1162,7 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
     };
 
     loadCachedData();
-  }, [calculateBounds]);
+  }, [baseNodesCacheKey, calculateBounds]);
 
   // ===== SSE for real-time updates (replaces polling) =====
   // SSE handlers for labels, node types, and following status updates
@@ -1303,14 +1331,14 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
           graphLabel: node.graphLabel || undefined,
           description: node.description || undefined,
         }));
-        graphIDB.save(CACHE_KEYS.BASE_NODES, cachedNodes).catch(err => {
+        graphIDB.save(baseNodesCacheKey, cachedNodes).catch(err => {
           console.warn('💾 [IndexedDB] Failed to update base nodes cache:', err);
         });
         
         graphDataEvents.emit('baseNodesUpdated');
       }
     }
-  }, []);
+  }, [baseNodesCacheKey]);
 
   const handleSSEFollowings = useCallback((data: SSEFollowingsData) => {
     console.log('🔌 [SSE] Followings update received:', data);
@@ -1437,6 +1465,10 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
   // Additional nodes are loaded via tile-based progressive loading when user zooms in
   // Cache stores CachedGraphNode (with coord_hash instead of twitter_id) for RGPD compliance
   const fetchBaseNodes = useCallback(async () => {
+    if (status !== 'authenticated') {
+      return;
+    }
+
     // Return existing promise if already fetching
     if (baseNodesPromiseRef.current) {
       return baseNodesPromiseRef.current;
@@ -1459,10 +1491,11 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
         const { changed: versionChanged } = await checkGraphNodesVersion();
         if (versionChanged) {
           await graphIDB.delete(CACHE_KEYS.BASE_NODES);
+          await graphIDB.delete(CACHE_KEYS.BASE_NODES_MOBILE);
         }
         
         // Try to load from IndexedDB cache first (stores CachedGraphNode without twitter_id)
-        const cached = !versionChanged ? await graphIDB.load<CachedGraphNode[]>(CACHE_KEYS.BASE_NODES) : null;
+        const cached = !versionChanged ? await graphIDB.load<CachedGraphNode[]>(baseNodesCacheKey) : null;
         if (cached && graphIDB.isCacheValidForNodes(cached.timestamp)) {
           
           // Convert CachedGraphNode back to GraphNode (using coord_hash as id)
@@ -1498,6 +1531,13 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
         const responseInitial = await fetch(`/api/graph/v3/auth/base-nodes?limit=${INITIAL_NODES_LIMIT}`, {
           method: 'GET',
         });
+
+        if (responseInitial.status === 401) {
+          if (typeof window !== 'undefined') {
+            window.location.assign('/auth/signin');
+          }
+          return;
+        }
 
         if (!responseInitial.ok) throw new Error('Failed to load initial nodes from Mosaic');
 
@@ -1567,7 +1607,7 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
         graphDataEvents.emit('baseNodesUpdated');
         
         // Save to IndexedDB cache
-        graphIDB.save(CACHE_KEYS.BASE_NODES, initialCached).catch(err => {
+        graphIDB.save(baseNodesCacheKey, initialCached).catch(err => {
           console.warn('💾 [IndexedDB] Failed to cache base nodes:', err);
         });
         
@@ -1580,7 +1620,7 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
     })();
 
     return baseNodesPromiseRef.current;
-  }, [parseArrowToNodes, tileConfig.INITIAL_NODES, tileConfig.ZOOM_THRESHOLD]);
+  }, [status, baseNodesCacheKey, parseArrowToNodes, baseNodesMinDegree, tileConfig.INITIAL_NODES, tileConfig.ZOOM_THRESHOLD]);
 
   // Fetch personal labels (for tooltips and floating labels) with IndexedDB cache
   // API now returns coord_hash instead of twitter_id for RGPD compliance
@@ -1743,7 +1783,10 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
     console.log('🔍 [GraphData] fetchFollowerHashes called, already loaded:', globalGraphState.followerHashesLoaded);
     // Skip if already loaded from cache
     if (globalGraphState.followerHashesLoaded) {
-      console.log('🔍 [GraphData] fetchFollowerHashes skipped (already loaded)');
+      console.log('🔍 [GraphData] fetchFollowerHashes skipped (already loaded)', {
+        followerCount: followerHashesRef.current.size,
+        effectiveCount: effectiveFollowerHashesRef.current.size,
+      });
       return;
     }
 
@@ -1758,6 +1801,12 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
         const data = await response.json();
         const hashes = data.hashes || [];
         const effectiveHashes = data.effectiveHashes || []; // Followers who followed via OP
+        console.log('🔍 [GraphData] fetchFollowerHashes API response', {
+          hashCount: hashes.length,
+          effectiveCount: effectiveHashes.length,
+          hashSample: hashes.slice(0, 3),
+          effectiveSample: effectiveHashes.slice(0, 3),
+        });
         
         // Update refs (stable references)
         followerHashesRef.current = new Set(hashes.map(normalizeCoordHash));
@@ -1767,6 +1816,11 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
         globalGraphState.followerHashesLoaded = true;
         
         console.log('📊 [GraphDataProvider] Loaded', hashes.length, 'follower hashes,', effectiveHashes.length, 'effective (via OP)');
+        console.log('🔍 [GraphData] fetchFollowerHashes normalized sets', {
+          followerCount: followerHashesRef.current.size,
+          effectiveCount: effectiveFollowerHashesRef.current.size,
+          normalizedEffectiveSample: Array.from(effectiveFollowerHashesRef.current).slice(0, 3),
+        });
         
         // Cache follower hashes to IndexedDB (24h TTL)
         const cacheData: CachedFollowerHashes = {
@@ -1781,6 +1835,11 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
         // Trigger re-render
         setHashesVersion((v: number) => v + 1);
         graphDataEvents.emit('followerHashesUpdated');
+      } else {
+        console.warn('⚠️ [GraphData] fetchFollowerHashes non-OK response', {
+          status: response.status,
+          statusText: response.statusText,
+        });
       }
     } catch (error) {
       console.error('❌ [GraphDataProvider] Error fetching follower hashes:', error);
@@ -2236,7 +2295,7 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
           if (tileBounds.minX >= tileBounds.maxX || tileBounds.minY >= tileBounds.maxY) continue;
 
           console.log(
-            `📦 [Auth Tiles] Fetching tile ${key} (degree in [${degreeFloor.toFixed(4)}, ${degreeCeiling.toFixed(4)}), ` +
+            `📦 [Auth Tiles] Fetching tile ${key} (full tile mode, previous degree band [${degreeFloor.toFixed(4)}, ${degreeCeiling.toFixed(4)}), ` +
               `limit ${perTileLimit}, bbox: [${tileBounds.minX.toFixed(2)}, ${tileBounds.maxX.toFixed(2)}] x ` +
               `[${tileBounds.minY.toFixed(2)}, ${tileBounds.maxY.toFixed(2)}])`
           );
@@ -2248,6 +2307,7 @@ export function GraphDataProvider({ children }: GraphDataProviderProps) {
           tileUrl.searchParams.set('gy', String(gy));
           tileUrl.searchParams.set('band', String(zoomLevelIndex));
           tileUrl.searchParams.set('ceiling', String(degreeCeiling));
+          tileUrl.searchParams.set('full', '1');
           tileUrl.searchParams.set('limit', String(perTileLimit));
 
           const response = await fetch(tileUrl.toString(), {
