@@ -2,7 +2,7 @@ import { queryNextAuth } from '../../database'
 import type { DBUser } from '../../types/database'
 import logger from '../../log_utils'
 
-type SupportedProvider = 'twitter' | 'bluesky' | 'mastodon' | 'facebook'
+type SupportedProvider = 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin' | 'facebook'
 
 /**
  * Repository pour les opérations sur les utilisateurs (schéma next-auth)

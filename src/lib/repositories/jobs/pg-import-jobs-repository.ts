@@ -7,7 +7,7 @@ export type ImportJobRow = {
   status: 'pending' | 'processing' | 'completed' | 'failed'
   total_items: number | null
   error_log: string | null
-  job_type: 'large_file_import' | 'direct_import'
+  job_type: 'large_file_import' | 'direct_import' | 'linkedin_archive_import'
   file_paths: string[] | null
   stats: any | null
   created_at: string
@@ -20,7 +20,7 @@ export type CreateImportJobInput = {
   userId: string
   status: 'pending' | 'processing' | 'completed' | 'failed'
   totalItems?: number
-  jobType: 'large_file_import' | 'direct_import'
+  jobType: 'large_file_import' | 'direct_import' | 'linkedin_archive_import'
   filePaths?: string[]
   stats?: any
 }
@@ -38,7 +38,7 @@ export const pgImportJobsRepository = {
     try {
       const res = await queryJobs<{ exists: boolean }>(
         `SELECT EXISTS (
-           SELECT 1 FROM import_jobs 
+           SELECT 1 FROM jobs.import_jobs 
            WHERE user_id = $1 AND status IN ('pending','processing')
          ) as exists`,
         [userId]
@@ -55,7 +55,7 @@ export const pgImportJobsRepository = {
       const res = await queryJobs<ImportJobRow>(
         `SELECT id, user_id, status, total_items, error_log, job_type,
                 file_paths, stats, created_at, updated_at, started_at, completed_at
-         FROM import_jobs
+         FROM jobs.import_jobs
          WHERE id = $1 AND user_id = $2
          LIMIT 1`,
         [jobId, userId]
@@ -75,7 +75,7 @@ export const pgImportJobsRepository = {
 
     try {
       const res = await queryJobs<ImportJobRow>(
-        `INSERT INTO import_jobs (user_id, status, total_items, job_type, file_paths, stats)
+        `INSERT INTO jobs.import_jobs (user_id, status, total_items, job_type, file_paths, stats)
          VALUES ($1, $2, $3, $4, $5::text[], $6::jsonb)
          RETURNING id, user_id, status, total_items, error_log, job_type,
                    file_paths, stats, created_at, updated_at, started_at, completed_at`,

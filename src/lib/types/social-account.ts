@@ -19,7 +19,7 @@ type BaseUserForLegacyHydration = Pick<
   | 'have_seen_v2'
 >
 
-export type SocialProvider = 'twitter' | 'bluesky' | 'mastodon' | 'linkedin' | string
+export type SocialProvider = 'twitter' | 'bluesky' | 'mastodon' | 'linkedin' | 'youtube' | string
 
 export interface SocialAccount {
   id: string
@@ -76,6 +76,8 @@ export function hydrateLegacyUserFromSocialAccounts(
   const twitter = getAccount(socialAccounts, 'twitter')
   const bluesky = getAccount(socialAccounts, 'bluesky')
   const mastodon = getAccount(socialAccounts, 'mastodon')
+  const youtube = getAccount(socialAccounts, 'youtube')
+  const linkedin = getAccount(socialAccounts, 'linkedin')
 
   return {
     id: user.id,
@@ -90,6 +92,12 @@ export function hydrateLegacyUserFromSocialAccounts(
     mastodon_username: mastodon?.username ?? undefined,
     mastodon_image: undefined,
     mastodon_instance: mastodon?.instance ?? undefined,
+    youtube_id: youtube?.provider_account_id ?? undefined,
+    youtube_username: youtube?.username ?? undefined,
+    youtube_image: undefined,
+    linkedin_id: linkedin?.provider_account_id ?? undefined,
+    linkedin_username: linkedin?.username ?? undefined,
+    linkedin_image: undefined,
     email: user.email ?? undefined,
     email_verified: user.email_verified ?? undefined,
     image: user.image ?? undefined,

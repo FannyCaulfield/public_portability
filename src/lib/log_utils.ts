@@ -4,6 +4,8 @@ import { format as formatDate } from 'date-fns';
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/app/auth';
 
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
 // Niveaux de log
 export enum LogLevel {
   DEBUG = 'DEBUG',
@@ -21,11 +23,11 @@ const LOG_CONFIG = {
   minLevel: (process.env.LOG_LEVEL || 'INFO') as keyof typeof LogLevel,
   
   // Destination des logs
-  logToConsole: true, // Toujours logger dans la console en développement
-  logToFile: process.env.NODE_ENV === 'production', // Seulement logger dans des fichiers en production
+  logToConsole: true,
+  logToFile: IS_PRODUCTION,
   
   // Chemin du dossier de logs dans le container
-  logDir: process.env.LOG_DIR || (process.env.NODE_ENV === 'production' ? '/app/logs' : './logs'),
+  logDir: process.env.LOG_DIR || (IS_PRODUCTION ? '/app/logs' : './logs'),
   
   // Préfixe des fichiers de log
   filePrefix: process.env.LOG_FILE_PREFIX || 'app',
@@ -184,6 +186,16 @@ function writeLog(entry: LogEntry) {
   
   // Écrire dans la console
   if (LOG_CONFIG.logToConsole) {
+    if (IS_PRODUCTION && entry.level === LogLevel.ERROR) {
+      console.error(formattedLog);
+      return;
+    }
+    
+    if (IS_PRODUCTION && entry.level === LogLevel.WARNING) {
+      console.warn(formattedLog);
+      return;
+    }
+    
     console.log(formattedLog);
   }
 }

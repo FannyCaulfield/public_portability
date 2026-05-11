@@ -373,7 +373,7 @@ export const pgGraphNodesRepository = {
       }
 
       await queryGraph<{ id: string }>(
-        `INSERT INTO consent_names(
+        `INSERT INTO consent.consent_names(
           user_id, consent_value, ip_address, user_agent, ip_address_full, is_active, consent_timestamp, created_at, updated_at
         )
         VALUES ($1, $2, $3, $4, $5, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -472,7 +472,7 @@ export const pgGraphNodesRepository = {
   async getNameConsent(userId: string): Promise<string | null> {
     try {
       const result = await queryGraph<{ consent_value: string }>(
-        `SELECT consent_value FROM consent_names WHERE user_id = $1 AND is_active = true`,
+        `SELECT consent_value FROM consent.consent_names WHERE user_id = $1 AND is_active = true`,
         [userId]
       )
       return result.rows[0]?.consent_value || null
@@ -521,7 +521,7 @@ export const pgGraphNodesRepository = {
             gn.y,
             gn.community
           FROM consent.users_with_name_consent uwnc
-          LEFT JOIN consent.public_accounts pa
+          LEFT JOIN public.public_accounts pa
             ON pa.twitter_id = uwnc.twitter_id
             AND uwnc.is_public_account = true
           INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = uwnc.twitter_id
@@ -599,7 +599,7 @@ export const pgGraphNodesRepository = {
               ELSE NULL
             END as mastodon_handle
           FROM consent.users_with_name_consent uwnc
-          LEFT JOIN consent.public_accounts pa
+          LEFT JOIN public.public_accounts pa
             ON pa.twitter_id = uwnc.twitter_id
             AND uwnc.is_public_account = true
           INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = uwnc.twitter_id

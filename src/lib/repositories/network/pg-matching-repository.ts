@@ -1,6 +1,7 @@
 import { MatchingTarget, StoredProcedureTarget, MatchedFollower, FollowerOfSource } from '../../types/matching'
 import { queryNetwork, queryPublic, queryNextAuth } from '../../database'
 import logger from '../../log_utils'
+import { pgMatchingHashRepository } from './pg-matching-hash-repository'
 
 export const pgMatchingRepository = {
   async getFollowableTargets(
@@ -19,27 +20,50 @@ export const pgMatchingRepository = {
       const safePageNumber = Math.max(0, pageNumber)
 
       const result = await queryNetwork(
-        `SELECT
-           st.node_id::text as node_id,
-           n.bluesky_handle,
-           n.mastodon_id,
-           n.mastodon_username,
-           n.mastodon_instance,
-           st.has_follow_bluesky,
-           st.has_follow_mastodon,
-           st.followed_at_bluesky,
-           st.followed_at_mastodon,
-           st.dismissed,
+        `WITH resolved_targets AS (
+           SELECT
+             st.node_id,
+             bluesky_pa.platform_username AS bluesky_handle,
+             mastodon_pa.platform_account_id AS mastodon_id,
+             mastodon_pa.platform_username AS mastodon_username,
+             NULLIF(mastodon_pa.platform_instance, '') AS mastodon_instance,
+             st.has_follow_bluesky,
+             st.has_follow_mastodon,
+             st.followed_at_bluesky,
+             st.followed_at_mastodon,
+             st.dismissed
+           FROM network.sources_targets st
+           LEFT JOIN identity.platform_accounts twitter_pa
+             ON twitter_pa.platform = 'twitter'
+            AND twitter_pa.platform_account_id = st.node_id::text
+            AND twitter_pa.platform_instance = ''
+           LEFT JOIN identity.platform_accounts bluesky_pa
+             ON bluesky_pa.identity_id = twitter_pa.identity_id
+            AND bluesky_pa.platform = 'bluesky'
+           LEFT JOIN identity.platform_accounts mastodon_pa
+             ON mastodon_pa.identity_id = twitter_pa.identity_id
+            AND mastodon_pa.platform = 'mastodon'
+           WHERE st.source_id = $1
+             AND (
+               (bluesky_pa.platform_username IS NOT NULL AND bluesky_pa.platform_username <> '')
+               OR
+               (mastodon_pa.platform_username IS NOT NULL AND mastodon_pa.platform_username <> '')
+             )
+         )
+         SELECT
+           rt.node_id::text as node_id,
+           rt.bluesky_handle,
+           rt.mastodon_id,
+           rt.mastodon_username,
+           rt.mastodon_instance,
+           rt.has_follow_bluesky,
+           rt.has_follow_mastodon,
+           rt.followed_at_bluesky,
+           rt.followed_at_mastodon,
+           rt.dismissed,
            COUNT(*) OVER() as total_count
-         FROM network.sources_targets st
-         JOIN network.nodes n ON n.twitter_id = st.node_id
-         WHERE st.source_id = $1
-           AND (
-             (n.bluesky_handle IS NOT NULL AND n.bluesky_unavailable IS NOT TRUE)
-             OR
-             (n.mastodon_username IS NOT NULL AND n.mastodon_unavailable IS NOT TRUE)
-           )
-         ORDER BY st.node_id
+         FROM resolved_targets rt
+         ORDER BY rt.node_id
          LIMIT $2::integer
          OFFSET ($3::integer * $2::integer)`,
         [userId, safePageSize, safePageNumber]
@@ -324,64 +348,48 @@ export const pgMatchingRepository = {
       const safePageNumber = Math.max(1, pageNumber + 1)
 
       const result = await queryNetwork(
-        `WITH bluesky_sources AS (
+        `WITH twitter_sources AS (
            SELECT
              sf.source_id,
-             tbu.twitter_id,
-             tbu.bluesky_username AS bluesky_handle,
-             NULL::text AS mastodon_id,
-             NULL::text AS mastodon_username,
-             NULL::text AS mastodon_instance,
+             COALESCE(twitter_pa.platform_account_id, sa.provider_account_id)::bigint AS twitter_id,
+             bluesky_pa.platform_username AS bluesky_handle,
+             mastodon_pa.platform_account_id AS mastodon_id,
+             mastodon_pa.platform_username AS mastodon_username,
+             NULLIF(mastodon_pa.platform_instance, '') AS mastodon_instance,
              sf.has_been_followed_on_bluesky,
-             false AS has_been_followed_on_mastodon
-           FROM network.sources_followers sf
-           INNER JOIN public.twitter_bluesky_users tbu ON tbu.id = sf.source_id
-           WHERE sf.node_id = $1::bigint
-             AND tbu.bluesky_username IS NOT NULL
-             AND tbu.bluesky_username <> ''
-         ),
-         mastodon_sources AS (
-           SELECT
-             sf.source_id,
-             tmu.twitter_id,
-             NULL::text AS bluesky_handle,
-             tmu.mastodon_id,
-             tmu.mastodon_username,
-             tmu.mastodon_instance,
-             false AS has_been_followed_on_bluesky,
              sf.has_been_followed_on_mastodon
            FROM network.sources_followers sf
-           INNER JOIN public.twitter_mastodon_users tmu ON tmu.id = sf.source_id
+           INNER JOIN "next-auth".social_accounts sa
+             ON sa.user_id = sf.source_id
+            AND sa.provider = 'twitter'
+           LEFT JOIN identity.platform_accounts twitter_pa
+             ON twitter_pa.platform = 'twitter'
+            AND twitter_pa.platform_account_id = sa.provider_account_id
+            AND twitter_pa.platform_instance = ''
+           LEFT JOIN identity.platform_accounts bluesky_pa
+             ON bluesky_pa.identity_id = twitter_pa.identity_id
+            AND bluesky_pa.platform = 'bluesky'
+           LEFT JOIN identity.platform_accounts mastodon_pa
+             ON mastodon_pa.identity_id = twitter_pa.identity_id
+            AND mastodon_pa.platform = 'mastodon'
            WHERE sf.node_id = $1::bigint
-             AND tmu.mastodon_username IS NOT NULL
-             AND tmu.mastodon_username <> ''
-         ),
-         combined_sources AS (
-           SELECT
-             COALESCE(b.source_id, m.source_id) AS source_id,
-             COALESCE(b.twitter_id, m.twitter_id) AS twitter_id,
-             COALESCE(b.bluesky_handle, m.bluesky_handle) AS bluesky_handle,
-             COALESCE(b.mastodon_id, m.mastodon_id) AS mastodon_id,
-             COALESCE(b.mastodon_username, m.mastodon_username) AS mastodon_username,
-             COALESCE(b.mastodon_instance, m.mastodon_instance) AS mastodon_instance,
-             COALESCE(b.has_been_followed_on_bluesky, m.has_been_followed_on_bluesky, false) AS has_been_followed_on_bluesky,
-             COALESCE(m.has_been_followed_on_mastodon, b.has_been_followed_on_mastodon, false) AS has_been_followed_on_mastodon
-           FROM bluesky_sources b
-           FULL OUTER JOIN mastodon_sources m
-             ON b.source_id = m.source_id
+             AND (
+               (bluesky_pa.platform_username IS NOT NULL AND bluesky_pa.platform_username <> '')
+               OR (mastodon_pa.platform_username IS NOT NULL AND mastodon_pa.platform_username <> '')
+             )
          )
          SELECT
-           cs.twitter_id::text AS source_twitter_id,
-           cs.bluesky_handle,
-           cs.mastodon_id,
-           cs.mastodon_username,
-           cs.mastodon_instance,
-           cs.has_been_followed_on_bluesky,
-           cs.has_been_followed_on_mastodon,
+           ts.twitter_id::text AS source_twitter_id,
+           ts.bluesky_handle,
+           ts.mastodon_id,
+           ts.mastodon_username,
+           ts.mastodon_instance,
+           ts.has_been_followed_on_bluesky,
+           ts.has_been_followed_on_mastodon,
            COUNT(*) OVER() AS total_count
-         FROM combined_sources cs
-         WHERE cs.twitter_id IS NOT NULL
-         ORDER BY cs.twitter_id
+         FROM twitter_sources ts
+         WHERE ts.twitter_id IS NOT NULL
+         ORDER BY ts.twitter_id
          LIMIT $2
          OFFSET (($3 - 1) * $2)`,
         [twitterId, safePageSize, safePageNumber]
@@ -664,12 +672,13 @@ export const pgMatchingRepository = {
   ): Promise<{ data: string[] | null; error: any }> {
     try {
       const result = await queryNetwork(
-        `SELECT DISTINCT COALESCE(tbu.twitter_id, tmu.twitter_id)::text as twitter_id
+        `SELECT DISTINCT sa.provider_account_id::text as twitter_id
          FROM network.sources_followers sf
-         LEFT JOIN public.twitter_bluesky_users tbu ON tbu.id = sf.source_id
-         LEFT JOIN public.twitter_mastodon_users tmu ON tmu.id = sf.source_id
+         INNER JOIN "next-auth".social_accounts sa
+           ON sa.user_id = sf.source_id
+          AND sa.provider = 'twitter'
          WHERE sf.node_id = $1::bigint
-           AND (tbu.twitter_id IS NOT NULL OR tmu.twitter_id IS NOT NULL)`,
+           AND sa.provider_account_id IS NOT NULL`,
         [followerTwitterId]
       )
 
@@ -710,9 +719,11 @@ export const pgMatchingRepository = {
       const sourceTwitterId = String(userResult.rows[0].twitter_id)
 
       const sourceIdResult = await queryNetwork(
-        `SELECT id as source_id FROM public.twitter_bluesky_users WHERE twitter_id = $1
-         UNION
-         SELECT id as source_id FROM public.twitter_mastodon_users WHERE twitter_id = $1
+        `SELECT sa.user_id as source_id
+         FROM "next-auth".social_accounts sa
+         JOIN network.sources s ON s.id = sa.user_id
+         WHERE sa.provider = 'twitter'
+           AND sa.provider_account_id = $1
          LIMIT 1`,
         [sourceTwitterId]
       )
@@ -789,103 +800,19 @@ export const pgMatchingRepository = {
   async getFollowerHashesForSourceUuid(
     sourceUuid: string
   ): Promise<{ data: string[] | null; error: any }> {
-    try {
-      const result = await queryNetwork(
-        `SELECT DISTINCT ROUND(gn.x::numeric, 6)::text || '_' || ROUND(gn.y::numeric, 6)::text as coord_hash
-         FROM network.sources_followers sf
-         INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = sf.node_id
-         WHERE sf.source_id = $1::uuid`,
-        [sourceUuid]
-      )
-
-      const data = result.rows.map((row: any) => row.coord_hash)
-      console.log('📊 [getFollowerHashesForSourceUuid] Found', data.length, 'follower hashes for source', sourceUuid)
-      return { data, error: null }
-    } catch (error) {
-      const errorString = error instanceof Error ? error.message : String(error)
-      logger.logError(
-        'Repository',
-        'pgMatchingRepository.getFollowerHashesForSourceUuid',
-        errorString,
-        'system',
-        { sourceUuid }
-      )
-      return { data: null, error }
-    }
+    return pgMatchingHashRepository.getFollowerHashesForSourceUuid(sourceUuid)
   },
 
   async getEffectiveFollowerHashesForSource(
     twitterId: string
   ): Promise<{ data: string[] | null; error: any }> {
-    try {
-      const result = await queryPublic(
-        `SELECT DISTINCT 
-           CONCAT(gn.x::text, '_', gn.y::text) as coord_hash
-         FROM network.sources_targets st
-         INNER JOIN "next-auth".social_accounts sa
-           ON sa.user_id = st.source_id
-          AND sa.provider = 'twitter'
-         INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = sa.provider_account_id::bigint
-         WHERE st.node_id = $1::bigint
-           AND (st.has_follow_bluesky = TRUE OR st.has_follow_mastodon = TRUE)`,
-        [twitterId]
-      )
-
-      const data = result.rows.map((row: any) => {
-        const parts = row.coord_hash.split('_')
-        const x = parseFloat(parts[0])
-        const y = parseFloat(parts[1])
-        return `${x.toFixed(6)}_${y.toFixed(6)}`
-      })
-
-      console.log('📊 [getEffectiveFollowerHashesForSource] Found', data.length, 'effective follower hashes for twitter_id', twitterId)
-      return { data, error: null }
-    } catch (error) {
-      const errorString = error instanceof Error ? error.message : String(error)
-      logger.logError(
-        'Repository',
-        'pgMatchingRepository.getEffectiveFollowerHashesForSource',
-        errorString,
-        'system',
-        { twitterId }
-      )
-      return { data: null, error }
-    }
+    return pgMatchingHashRepository.getEffectiveFollowerHashesForSource(twitterId)
   },
 
   async getFollowingHashesForFollower(
     followerTwitterId: string
   ): Promise<{ data: string[] | null; error: any }> {
-    try {
-      const result = await queryNetwork(
-        `WITH source_twitter_ids AS (
-           SELECT DISTINCT COALESCE(tbu.twitter_id, tmu.twitter_id) as twitter_id
-           FROM network.sources_followers sf
-           LEFT JOIN public.twitter_bluesky_users tbu ON tbu.id = sf.source_id
-           LEFT JOIN public.twitter_mastodon_users tmu ON tmu.id = sf.source_id
-           WHERE sf.node_id = $1::bigint
-             AND (tbu.twitter_id IS NOT NULL OR tmu.twitter_id IS NOT NULL)
-         )
-         SELECT ROUND(gn.x::numeric, 6)::text || '_' || ROUND(gn.y::numeric, 6)::text as coord_hash
-         FROM source_twitter_ids s
-         INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = s.twitter_id`,
-        [followerTwitterId]
-      )
-
-      const data = result.rows.map((row: any) => row.coord_hash)
-      console.log('📊 [getFollowingHashesForFollower] Found', data.length, 'following hashes for follower', followerTwitterId)
-      return { data, error: null }
-    } catch (error) {
-      const errorString = error instanceof Error ? error.message : String(error)
-      logger.logError(
-        'Repository',
-        'pgMatchingRepository.getFollowingHashesForFollower',
-        errorString,
-        'system',
-        { followerTwitterId }
-      )
-      return { data: null, error }
-    }
+    return pgMatchingHashRepository.getFollowingHashesForFollower(followerTwitterId)
   },
 
   async getSourcesOfTargetWithHashes(
@@ -893,221 +820,31 @@ export const pgMatchingRepository = {
     pageSize: number = 1000,
     pageNumber: number = 0
   ): Promise<{ data: { hashes: string[]; total_count: number } | null; error: any }> {
-    try {
-      const safePageSize = Math.max(1, pageSize)
-      const safePageNumber = Math.max(0, pageNumber)
-
-      const result = await queryNetwork(
-        `WITH sources AS (
-           SELECT DISTINCT st.source_id
-           FROM network.sources_targets st
-           WHERE st.node_id = $1::bigint
-         ),
-         source_twitter_ids AS (
-           SELECT sa.provider_account_id::bigint as twitter_id
-           FROM "next-auth".social_accounts sa
-           WHERE sa.provider = 'twitter'
-             AND sa.user_id IN (SELECT source_id FROM sources)
-             AND sa.provider_account_id IS NOT NULL
-         ),
-         hashes_with_count AS (
-           SELECT 
-             ROUND(gn.x::numeric, 6)::text || '_' || ROUND(gn.y::numeric, 6)::text as hash,
-             COUNT(*) OVER() as total_count
-           FROM source_twitter_ids s
-           INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = s.twitter_id
-         )
-         SELECT 
-           h.hash as coord_hash,
-           COALESCE(h.total_count, 0) as total_count
-         FROM hashes_with_count h
-         ORDER BY h.hash
-         LIMIT $2::integer
-         OFFSET ($3::integer * $2::integer)`,
-        [targetTwitterId, safePageSize, safePageNumber]
-      )
-
-      const hashes = result.rows.map((row: any) => row.coord_hash)
-      const total_count = result.rows[0]?.total_count || 0
-
-      console.log('📊 [getSourcesOfTargetWithHashes] Found', hashes.length, 'source hashes for target', targetTwitterId)
-      return { data: { hashes, total_count }, error: null }
-    } catch (error) {
-      const errorString = error instanceof Error ? error.message : String(error)
-      logger.logError(
-        'Repository',
-        'pgMatchingRepository.getSourcesOfTargetWithHashes',
-        errorString,
-        'system',
-        { targetTwitterId, pageSize, pageNumber }
-      )
-      return { data: null, error }
-    }
+    return pgMatchingHashRepository.getSourcesOfTargetWithHashes(targetTwitterId, pageSize, pageNumber)
   },
 
   async getFollowingHashesForOnboardedUser(
     userId: string
   ): Promise<{ data: { coord_hash: string; node_id: string; has_follow_bluesky: boolean; has_follow_mastodon: boolean }[] | null; error: any }> {
-    try {
-      const result = await queryNetwork(
-        `SELECT CONCAT(
-           ROUND(gn.x::numeric, 6)::text, '_', 
-           ROUND(gn.y::numeric, 6)::text
-         ) as coord_hash,
-         st.node_id::text as node_id,
-         COALESCE(st.has_follow_bluesky, false) as has_follow_bluesky,
-         COALESCE(st.has_follow_mastodon, false) as has_follow_mastodon
-         FROM sources_targets st
-         INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = st.node_id
-         WHERE st.source_id = $1`,
-        [userId]
-      )
-
-      const data = result.rows.map((row: any) => ({
-        coord_hash: row.coord_hash,
-        node_id: row.node_id,
-        has_follow_bluesky: row.has_follow_bluesky,
-        has_follow_mastodon: row.has_follow_mastodon,
-      }))
-      const followedCount = data.filter((d: { has_follow_bluesky: boolean; has_follow_mastodon: boolean }) => d.has_follow_bluesky || d.has_follow_mastodon).length
-      console.log('📊 [getFollowingHashesForOnboardedUser] Found', data.length, 'following hashes for user', userId, `(${followedCount} already followed)`)
-      return { data, error: null }
-    } catch (error) {
-      const errorString = error instanceof Error ? error.message : String(error)
-      logger.logError(
-        'Repository',
-        'pgMatchingRepository.getFollowingHashesForOnboardedUser',
-        errorString,
-        'system',
-        { userId }
-      )
-      return { data: null, error }
-    }
+    return pgMatchingHashRepository.getFollowingHashesForOnboardedUser(userId)
   },
 
   async getCoordHashesByNodeIds(
     nodeIds: string[]
   ): Promise<{ data: Map<string, string> | null; error: any }> {
-    if (nodeIds.length === 0) {
-      return { data: new Map(), error: null }
-    }
-
-    try {
-      const nodeIdsBigInt = nodeIds.map(id => BigInt(id))
-
-      const result = await queryNetwork(
-        `SELECT 
-           id::text as node_id,
-           CONCAT(
-             ROUND(x::numeric, 6)::text, '_', 
-             ROUND(y::numeric, 6)::text
-           ) as coord_hash
-         FROM graph.graph_nodes_03_11_25
-         WHERE id = ANY($1::bigint[])`,
-        [nodeIdsBigInt]
-      )
-
-      const hashMap = new Map<string, string>()
-      result.rows.forEach((row: any) => {
-        hashMap.set(row.node_id, row.coord_hash)
-      })
-
-      return { data: hashMap, error: null }
-    } catch (error) {
-      const errorString = error instanceof Error ? error.message : String(error)
-      logger.logError(
-        'Repository',
-        'pgMatchingRepository.getCoordHashesByNodeIds',
-        errorString,
-        'system',
-        { nodeIdsCount: nodeIds.length }
-      )
-      return { data: null, error }
-    }
+    return pgMatchingHashRepository.getCoordHashesByNodeIds(nodeIds)
   },
 
   async getFollowerCommunityStats(
     sourceUuid: string
   ): Promise<{ data: { communities: Array<{ community: number; count: number; percentage: number }>; totalFollowersInGraph: number } | null; error: any }> {
-    try {
-      const result = await queryPublic(
-        `SELECT 
-           gn.community,
-           COUNT(*) as count
-         FROM network.sources_followers sf
-         INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = sf.node_id
-         WHERE sf.source_id = $1::uuid
-           AND gn.community IS NOT NULL
-         GROUP BY gn.community
-         ORDER BY count DESC`,
-        [sourceUuid]
-      )
-
-      const totalFollowersInGraph = result.rows.reduce((sum: number, row: any) => sum + parseInt(row.count), 0)
-
-      const communities = result.rows.map((row: any) => ({
-        community: parseInt(row.community),
-        count: parseInt(row.count),
-        percentage: totalFollowersInGraph > 0
-          ? parseFloat(((parseInt(row.count) / totalFollowersInGraph) * 100).toFixed(1))
-          : 0,
-      }))
-
-      return { data: { communities, totalFollowersInGraph }, error: null }
-    } catch (error) {
-      const errorString = error instanceof Error ? error.message : String(error)
-      logger.logError(
-        'Repository',
-        'pgMatchingRepository.getFollowerCommunityStats',
-        errorString,
-        'system',
-        { sourceUuid }
-      )
-      return { data: null, error }
-    }
+    return pgMatchingHashRepository.getFollowerCommunityStats(sourceUuid)
   },
 
   async getFollowerCommunityStatsForTarget(
     targetTwitterId: string
   ): Promise<{ data: { communities: Array<{ community: number; count: number; percentage: number }>; totalFollowersInGraph: number } | null; error: any }> {
-    try {
-      const result = await queryNetwork(
-        `SELECT 
-           gn.community,
-           COUNT(*) as count
-         FROM network.sources_followers sf
-         INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = sf.node_id
-         LEFT JOIN public.twitter_bluesky_users tbu ON tbu.id = sf.source_id
-         LEFT JOIN public.twitter_mastodon_users tmu ON tmu.id = sf.source_id
-         WHERE COALESCE(tbu.twitter_id, tmu.twitter_id)::text = $1
-           AND gn.community IS NOT NULL
-         GROUP BY gn.community
-         ORDER BY count DESC`,
-        [targetTwitterId]
-      )
-
-      const totalFollowersInGraph = result.rows.reduce((sum: number, row: any) => sum + parseInt(row.count), 0)
-
-      const communities = result.rows.map((row: any) => ({
-        community: parseInt(row.community),
-        count: parseInt(row.count),
-        percentage: totalFollowersInGraph > 0
-          ? parseFloat(((parseInt(row.count) / totalFollowersInGraph) * 100).toFixed(1))
-          : 0,
-      }))
-
-      return { data: { communities, totalFollowersInGraph }, error: null }
-    } catch (error) {
-      const errorString = error instanceof Error ? error.message : String(error)
-      logger.logError(
-        'Repository',
-        'pgMatchingRepository.getFollowerCommunityStatsForTarget',
-        errorString,
-        'system',
-        { targetTwitterId }
-      )
-      return { data: null, error }
-    }
+    return pgMatchingHashRepository.getFollowerCommunityStatsForTarget(targetTwitterId)
   },
 
   async getFollowersOfSource(

@@ -7,14 +7,16 @@ export const SSE_HEARTBEAT_INTERVAL_MS = 30000;
 /**
  * SSE Event Types:
  * - labels: Public labels changed (consent change by any user)
- * - nodeTypes: Node types changed (member ↔ generic)
+ * - nodeTypes: Node types changed (member generic)
  * - followers: Follower hashes updated (new effective follower)
  * - followings: Following status updated (after follow action)
  * - stats:global: Global stats updated (new user, new follow)
  * - stats:user: User-specific stats updated (after user action)
+ * - importJob: import worker progress updates
+ * - networkSync: network worker progress updates
  */
 export interface SSEEvent {
-  type: 'labels' | 'nodeTypes' | 'followers' | 'followings' | 'stats:global' | 'stats:user';
+  type: 'labels' | 'nodeTypes' | 'followers' | 'followings' | 'stats:global' | 'stats:user' | 'importJob' | 'networkSync';
   data: any;
   // Optional: target specific user (null = broadcast to all)
   userId?: string | null;

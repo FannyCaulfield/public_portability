@@ -41,6 +41,38 @@ async function waitForCondition(fn: () => Promise<boolean>, timeoutMs = 5000, in
   throw new Error(`Condition not met within ${timeoutMs}ms`);
 }
 
+async function getIdentityState(pg: Client, testUserId: string, twitterId: string) {
+  const result = await pg.query(
+    `SELECT
+       i.id AS identity_id,
+       i.app_user_id,
+       pa.platform,
+       pa.platform_account_id,
+       pa.platform_username,
+       pa.platform_instance,
+       pa.auth_social_account_id
+     FROM identity.identities i
+     LEFT JOIN identity.platform_accounts pa
+       ON pa.identity_id = i.id
+     WHERE i.app_user_id = $1
+     ORDER BY pa.platform, pa.platform_account_id`,
+    [testUserId]
+  );
+
+  const nodeResult = await pg.query(
+    `SELECT
+       twitter_id::text AS twitter_id
+     FROM network.nodes
+     WHERE twitter_id = $1`,
+    [twitterId]
+  );
+
+  return {
+    identityRows: result.rows,
+    nodeRow: nodeResult.rows[0] ?? null,
+  };
+}
+
 describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)', () => {
   let pg: Client;
   let redis: Redis;
@@ -137,6 +169,23 @@ describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)'
       return val === `bsky_${twitterId}`;
     }, 8000, 200);
 
+    await waitForCondition(async () => {
+      const { identityRows, nodeRow } = await getIdentityState(pg, testUserId, twitterId);
+      const twitterAccount = identityRows.find((row) => row.platform === 'twitter');
+      const blueskyAccount = identityRows.find((row) => row.platform === 'bluesky');
+
+      return Boolean(
+        identityRows.length >= 2 &&
+        twitterAccount?.platform_account_id === twitterId &&
+        twitterAccount?.platform_instance === '' &&
+        blueskyAccount?.platform_account_id === `did:plc:${twitterId}` &&
+        blueskyAccount?.platform_username === `bsky_${twitterId}` &&
+        blueskyAccount?.platform_instance === '' &&
+        blueskyAccount?.auth_social_account_id === blueskySocialAccountId &&
+        nodeRow?.twitter_id === twitterId
+      );
+    }, 8000, 200);
+
     // Delete bluesky social account (should delete)
     await pg.query(
       `DELETE FROM "next-auth".social_accounts
@@ -148,6 +197,18 @@ describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)'
     await waitForCondition(async () => {
       const val = await redis.get(key);
       return val === null;
+    }, 8000, 200);
+
+    await waitForCondition(async () => {
+      const { identityRows, nodeRow } = await getIdentityState(pg, testUserId, twitterId);
+      const twitterAccounts = identityRows.filter((row) => row.platform === 'twitter');
+      const blueskyAccounts = identityRows.filter((row) => row.platform === 'bluesky');
+
+      return Boolean(
+        twitterAccounts.length === 1 &&
+        blueskyAccounts.length === 0 &&
+        nodeRow?.twitter_id === twitterId
+      );
     }, 8000, 200);
   }, 20000);
 
@@ -183,6 +244,23 @@ describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)'
       }
     }, 8000, 200);
 
+    await waitForCondition(async () => {
+      const { identityRows, nodeRow } = await getIdentityState(pg, testUserId, twitterId);
+      const twitterAccount = identityRows.find((row) => row.platform === 'twitter');
+      const mastodonAccount = identityRows.find((row) => row.platform === 'mastodon');
+
+      return Boolean(
+        identityRows.length >= 2 &&
+        twitterAccount?.platform_account_id === twitterId &&
+        twitterAccount?.platform_instance === '' &&
+        mastodonAccount?.platform_account_id === `mastodon_${twitterId}` &&
+        mastodonAccount?.platform_username === `m_${twitterId}` &&
+        mastodonAccount?.platform_instance === 'example.social' &&
+        mastodonAccount?.auth_social_account_id === mastodonSocialAccountId &&
+        nodeRow?.twitter_id === twitterId
+      );
+    }, 8000, 200);
+
     // Delete mastodon social account (should delete)
     await pg.query(
       `DELETE FROM "next-auth".social_accounts
@@ -194,6 +272,18 @@ describe('Sync users → Redis mappings (pg_notify → Node listener → Redis)'
     await waitForCondition(async () => {
       const val = await redis.get(key);
       return val === null;
+    }, 8000, 200);
+
+    await waitForCondition(async () => {
+      const { identityRows, nodeRow } = await getIdentityState(pg, testUserId, twitterId);
+      const twitterAccounts = identityRows.filter((row) => row.platform === 'twitter');
+      const mastodonAccounts = identityRows.filter((row) => row.platform === 'mastodon');
+
+      return Boolean(
+        twitterAccounts.length === 1 &&
+        mastodonAccounts.length === 0 &&
+        nodeRow?.twitter_id === twitterId
+      );
     }, 8000, 200);
   }, 20000);
 

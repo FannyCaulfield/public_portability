@@ -33,6 +33,12 @@ export interface CustomAdapterUser extends Omit<AdapterUser, 'image'> {
   mastodon_username?: string | null
   mastodon_image?: string | null
   mastodon_instance?: string | null
+  youtube_id?: string | null
+  youtube_username?: string | null
+  youtube_image?: string | null
+  linkedin_id?: string | null
+  linkedin_username?: string | null
+  linkedin_image?: string | null
 }
 
 export interface TwitterData extends Profile {
@@ -64,6 +70,21 @@ async function syncSocialAccountFromProfile(userId: string, provider: SocialProv
     return
   }
 
+  if (provider === 'linkedin') {
+    const linkedInData = profile as LinkedInProfile
+    await pgSocialAccountRepository.upsertSocialAccount({
+      user_id: userId,
+      provider: 'linkedin',
+      provider_account_id: linkedInData.sub,
+      username: linkedInData.email ?? linkedInData.name ?? null,
+      instance: '',
+      email: email ?? linkedInData.email ?? null,
+      is_primary: true,
+      last_seen_at: new Date(),
+    })
+    return
+  }
+
   if (provider === 'mastodon') {
     const mastodonData = profile as MastodonProfile
     await pgSocialAccountRepository.upsertSocialAccount({
@@ -73,6 +94,21 @@ async function syncSocialAccountFromProfile(userId: string, provider: SocialProv
       username: mastodonData.username,
       instance: getMastodonInstance(mastodonData),
       email: email ?? null,
+      is_primary: true,
+      last_seen_at: new Date(),
+    })
+    return
+  }
+
+  if (provider === 'youtube') {
+    const youtubeData = profile as YouTubeProfile
+    await pgSocialAccountRepository.upsertSocialAccount({
+      user_id: userId,
+      provider: 'youtube',
+      provider_account_id: youtubeData.sub,
+      username: youtubeData.email ?? youtubeData.name ?? null,
+      instance: '',
+      email: email ?? youtubeData.email ?? null,
       is_primary: true,
       last_seen_at: new Date(),
     })
@@ -111,9 +147,28 @@ export interface BlueskyProfile extends Profile {
   identifier?: string
 }
 
-export type ProviderProfile = TwitterData | MastodonProfile | BlueskyProfile
+export interface YouTubeProfile extends Profile {
+  sub: string
+  name?: string
+  email?: string
+  picture?: string
+  given_name?: string
+  family_name?: string
+}
 
-type SocialProvider = 'twitter' | 'bluesky' | 'mastodon'
+export interface LinkedInProfile extends Profile {
+  sub: string
+  name?: string
+  given_name?: string
+  family_name?: string
+  picture?: string
+  email?: string
+  email_verified?: boolean
+}
+
+export type ProviderProfile = TwitterData | MastodonProfile | BlueskyProfile | YouTubeProfile | LinkedInProfile
+
+type SocialProvider = 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin'
 
 export class UnlinkError extends Error {
   constructor(
@@ -134,6 +189,7 @@ async function dbUserToAdapterUser(user: DBUser): Promise<CustomAdapterUser> {
   const hydratedUser = hydrateLegacyUserFromSocialAccounts(user, socialAccounts)
 
   return {
+    ...hydratedUser,
     id: user.id,
     name: user.name,
     email: user.email ?? '',
@@ -153,20 +209,26 @@ async function dbUserToAdapterUser(user: DBUser): Promise<CustomAdapterUser> {
     mastodon_id: hydratedUser.mastodon_id ?? null,
     mastodon_username: hydratedUser.mastodon_username ?? null,
     mastodon_image: null,
-    mastodon_instance: hydratedUser.mastodon_instance ?? null
+    mastodon_instance: hydratedUser.mastodon_instance ?? null,
+    youtube_id: hydratedUser.youtube_id ?? null,
+    youtube_username: hydratedUser.youtube_username ?? null,
+    youtube_image: null,
+    linkedin_id: hydratedUser.linkedin_id ?? null,
+    linkedin_username: hydratedUser.linkedin_username ?? null,
+    linkedin_image: null,
   }
 }
 
 export async function createUser(user: Partial<AdapterUser>): Promise<CustomAdapterUser>
 export async function createUser(
   userData: Partial<AdapterUser> | (Partial<CustomAdapterUser> & {
-    provider?: 'twitter' | 'bluesky' | 'mastodon',
+    provider?: 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin',
     profile?: ProviderProfile
   })
 ): Promise<CustomAdapterUser> {
 
   // Type guard for provider data
-  let provider: 'twitter' | 'bluesky' | 'mastodon' | undefined = undefined
+  let provider: 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin' | undefined = undefined
   let profile: ProviderProfile | undefined = undefined
   let providerId: string | undefined = undefined
   let mastodonInstance: string | undefined = undefined
@@ -192,9 +254,13 @@ export async function createUser(
         })
         throw new Error(`Invalid Mastodon URL: ${mastodonProfile.url}`)
       }
+    } else if (provider === 'youtube') {
+      providerId = (profile as YouTubeProfile).sub
+    } else if (provider === 'linkedin') {
+      providerId = (profile as LinkedInProfile).sub
     } else {
       // Bluesky case
-      providerId = (userData as any).did || (userData as any).profile?.did
+      providerId = (profile as BlueskyProfile).did || (userData as any).profile?.did
     }
 
     if (!providerId) {
@@ -250,6 +316,14 @@ export async function createUser(
       userToCreate.name = (profile as TwitterData).data.name
     } else if (provider === 'mastodon') {
       userToCreate.name = (profile as MastodonProfile).display_name
+    } else if (provider === 'youtube') {
+      const youtubeData = profile as YouTubeProfile
+      userToCreate.name = youtubeData.name
+      userToCreate.email = youtubeData.email ?? undefined
+    } else if (provider === 'linkedin') {
+      const linkedInData = profile as LinkedInProfile
+      userToCreate.name = linkedInData.name
+      userToCreate.email = linkedInData.email ?? undefined
     } else if (provider === 'bluesky') {
       const blueskyData = profile as BlueskyProfile
       userToCreate.name = blueskyData.displayName || blueskyData.name
@@ -289,7 +363,7 @@ export async function getUserByEmail(email: string): Promise<CustomAdapterUser |
 }
 
 export async function getUserByAccount(
-  { providerAccountId, provider }: { providerAccountId: string; provider: 'twitter' | 'bluesky' | 'mastodon' | 'piaille' }
+  { providerAccountId, provider }: { providerAccountId: string; provider: 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin' | 'piaille' }
 ): Promise<CustomAdapterUser | null> {
 
   if (provider === 'mastodon' || provider === 'piaille') {
@@ -306,14 +380,14 @@ export async function updateUser(user: Partial<AdapterUser> & Pick<AdapterUser, 
 export async function updateUser(
   userId: string,
   providerData?: {
-    provider: 'twitter' | 'bluesky' | 'mastodon',
+    provider: 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin',
     profile: ProviderProfile
   }
 ): Promise<CustomAdapterUser>
 export async function updateUser(
   userOrId: (Partial<AdapterUser> & Pick<AdapterUser, "id">) | string,
   providerData?: {
-    provider: 'twitter' | 'bluesky' | 'mastodon',
+    provider: 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin',
     profile: ProviderProfile
   }
 ): Promise<CustomAdapterUser> {
@@ -339,6 +413,16 @@ export async function updateUser(
   else if (providerData?.provider === 'bluesky' && providerData.profile) {
     const blueskyData = providerData.profile as BlueskyProfile
     updates.name = blueskyData.displayName || blueskyData.name
+  }
+  else if (providerData?.provider === 'youtube' && providerData.profile) {
+    const youtubeData = providerData.profile as YouTubeProfile
+    updates.name = youtubeData.name
+    updates.email = youtubeData.email ?? undefined
+  }
+  else if (providerData?.provider === 'linkedin' && providerData.profile) {
+    const linkedInData = providerData.profile as LinkedInProfile
+    updates.name = linkedInData.name
+    updates.email = linkedInData.email ?? undefined
   }
 
   const updatedUser = await pgUserRepository.updateUser(userId, updates)
@@ -390,7 +474,7 @@ export async function linkAccount(account: AdapterAccount): Promise<void> {
   })
 
   const provider = account.provider === 'piaille' ? 'mastodon' : account.provider
-  if (provider !== 'twitter' && provider !== 'bluesky' && provider !== 'mastodon') {
+  if (provider !== 'twitter' && provider !== 'bluesky' && provider !== 'mastodon' && provider !== 'youtube' && provider !== 'linkedin') {
     return
   }
 
@@ -508,12 +592,32 @@ export async function getAccountsByUserId(userId: string): Promise<AdapterAccoun
     }
   }
 
+  const youtubeAccount = socialAccounts.find((account) => account.provider === 'youtube')
+  if (youtubeAccount?.provider_account_id) {
+    accounts.push({
+      provider: 'youtube',
+      type: 'oauth',
+      providerAccountId: youtubeAccount.provider_account_id,
+      userId: user.id
+    })
+  }
+
+  const linkedinAccount = socialAccounts.find((account) => account.provider === 'linkedin')
+  if (linkedinAccount?.provider_account_id) {
+    accounts.push({
+      provider: 'linkedin',
+      type: 'oauth',
+      providerAccountId: linkedinAccount.provider_account_id,
+      userId: user.id
+    })
+  }
+
   return accounts
 }
 
 async function unlinkAccountImpl(
   userId: string,
-  provider: 'twitter' | 'bluesky' | 'mastodon' | 'piaille'
+  provider: 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin' | 'piaille'
 ): Promise<void> {
 
   const socialAccounts = await pgSocialAccountRepository.getSocialAccountsByUserId(userId)
@@ -575,7 +679,7 @@ export async function unlinkAccount(
     throw new UnlinkError("User not found", "NOT_FOUND", 404)
   }
 
-  await unlinkAccountImpl(user.id, account.provider as 'twitter' | 'bluesky' | 'mastodon')
+  await unlinkAccountImpl(user.id, account.provider as 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin' | 'piaille')
 }
 
 type CustomPgAdapter = Omit<Adapter, 'getUserByAccount' | 'updateUser' | 'createUser' | 'linkAccount'> & {
@@ -583,14 +687,14 @@ type CustomPgAdapter = Omit<Adapter, 'getUserByAccount' | 'updateUser' | 'create
   updateUser: {
     (user: Partial<AdapterUser> & Pick<AdapterUser, "id">): Promise<CustomAdapterUser>
     (userId: string, providerData?: {
-      provider: 'twitter' | 'bluesky' | 'mastodon',
+      provider: 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin',
       profile: ProviderProfile
     }): Promise<CustomAdapterUser>
   }
   createUser: {
     (user: Partial<AdapterUser>): Promise<CustomAdapterUser>
     (userData: Partial<AdapterUser> | (Partial<CustomAdapterUser> & {
-      provider?: 'twitter' | 'bluesky' | 'mastodon',
+      provider?: 'twitter' | 'bluesky' | 'mastodon' | 'youtube' | 'linkedin',
       profile?: ProviderProfile
     })): Promise<CustomAdapterUser>
   }

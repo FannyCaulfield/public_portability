@@ -284,6 +284,78 @@ export class GraphNodesService {
 
     return results
   }
+
+  /**
+   * Récupère les nœuds membres discoverables d'une communauté
+   * avec consentement et enrichissement handles
+   */
+  async getMemberNodesByCommunityWithConsent(communityId: number): Promise<LassoNodeMatch[]> {
+    logger.logDebug(
+      'Service',
+      'GraphNodesService.getMemberNodesByCommunityWithConsent',
+      `Processing community ${communityId}`,
+      'system'
+    )
+
+    const nodes = await pgGraphNodesRepository.getMemberNodesByCommunityWithConsent(communityId)
+
+    if (nodes.length === 0) {
+      logger.logDebug(
+        'Service',
+        'GraphNodesService.getMemberNodesByCommunityWithConsent',
+        'No member nodes with consent found for community',
+        'system',
+        { communityId }
+      )
+      return []
+    }
+
+    const twitterIds = nodes.map(n => n.id)
+    const handlesMap = await redisMatchingRepository.getHandlesFromTwitterIds(twitterIds)
+
+    const results: LassoNodeMatch[] = nodes
+      .map(node => {
+        const handles = handlesMap.get(node.id)
+        const cleanedInstance = handles?.mastodon?.instance
+          ? cleanMastodonInstance(handles.mastodon.instance)
+          : null
+
+        return {
+          twitter_id: node.id,
+          hash: coordHash(node.x, node.y),
+          label: node.label,
+          x: node.x,
+          y: node.y,
+          community: node.community,
+          tier: node.tier,
+          graph_label: node.graph_label,
+          node_type: node.node_type,
+          bluesky_handle: handles?.bluesky?.username || null,
+          mastodon_handle: handles?.mastodon
+            ? `@${handles.mastodon.username}@${cleanedInstance}`
+            : null,
+          mastodon_username: handles?.mastodon?.username || null,
+          mastodon_instance: cleanedInstance,
+          has_follow_bluesky: false,
+          has_follow_mastodon: false,
+        }
+      })
+      .filter(node => node.bluesky_handle || node.mastodon_handle)
+
+    logger.logDebug(
+      'Service',
+      'GraphNodesService.getMemberNodesByCommunityWithConsent',
+      `Returning ${results.length} enriched member nodes with consent for community ${communityId}`,
+      'system',
+      {
+        totalNodes: nodes.length,
+        withBluesky: results.filter(r => r.bluesky_handle).length,
+        withMastodon: results.filter(r => r.mastodon_handle).length,
+      }
+    )
+
+    return results
+  }
 }
 
 // Export singleton instance

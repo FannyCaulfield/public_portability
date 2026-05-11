@@ -52,6 +52,51 @@ async function insertTwitterSocialAccount(
   )
 }
 
+async function insertIdentityForTarget(
+  pg: Client,
+  twitterId: string,
+  accounts: Array<{
+    platform: 'bluesky' | 'mastodon'
+    platformAccountId: string
+    platformUsername: string | null
+    platformInstance?: string
+  }>
+): Promise<string> {
+  const identityResult = await pg.query<{ id: string }>(
+    `INSERT INTO identity.identities (created_at, updated_at, last_seen_at)
+     VALUES (now(), now(), now())
+     RETURNING id`
+  )
+
+  const identityId = identityResult.rows[0].id
+
+  await pg.query(
+    `INSERT INTO identity.platform_accounts (
+       identity_id, platform, platform_account_id, platform_username, platform_instance, created_at, updated_at, last_seen_at
+     )
+     VALUES ($1, 'twitter', $2, $3, '', now(), now(), now())`,
+    [identityId, twitterId, `twitter-${twitterId}`]
+  )
+
+  for (const account of accounts) {
+    await pg.query(
+      `INSERT INTO identity.platform_accounts (
+         identity_id, platform, platform_account_id, platform_username, platform_instance, created_at, updated_at, last_seen_at
+       )
+       VALUES ($1, $2, $3, $4, $5, now(), now(), now())`,
+      [
+        identityId,
+        account.platform,
+        account.platformAccountId,
+        account.platformUsername,
+        account.platformInstance ?? '',
+      ]
+    )
+  }
+
+  return identityId
+}
+
 describe('GET /api/migrate/matching_found', () => {
   let pg: Client
 
@@ -69,6 +114,11 @@ describe('GET /api/migrate/matching_found', () => {
   const mastodonNodeId = sourceTwitterId + BigInt(202)
   const syncedNodeId = sourceTwitterId + BigInt(303)
   const mastodonId = `masto-${randomUUID().slice(0, 8)}`
+  const blueskyDid = `did:plc:${randomUUID().replace(/-/g, '')}`
+  const syncedBlueskyDid = `did:plc:${randomUUID().replace(/-/g, '')}`
+  let blueskyTargetIdentityId: string
+  let mastodonTargetIdentityId: string
+  let syncedTargetIdentityId: string
 
   beforeAll(async () => {
     pg = new Client(pgDirectConfig)
@@ -178,32 +228,21 @@ describe('GET /api/migrate/matching_found', () => {
     )
 
     await pg.query(
-      `INSERT INTO network.nodes (twitter_id, bluesky_handle, bluesky_unavailable, mastodon_unavailable)
-       VALUES ($1, $2, false, false)
+      `INSERT INTO network.nodes (twitter_id, bluesky_unavailable, mastodon_unavailable)
+       VALUES ($1, false, false)
        ON CONFLICT (twitter_id) DO UPDATE SET
-         bluesky_handle = EXCLUDED.bluesky_handle,
          bluesky_unavailable = false,
          mastodon_unavailable = false`,
-      [blueskyNodeId.toString(), 'matching-found-target.bsky.social']
+      [blueskyNodeId.toString()]
     )
 
     await pg.query(
-      `INSERT INTO network.nodes (
-         twitter_id,
-         mastodon_id,
-         mastodon_username,
-         mastodon_instance,
-         bluesky_unavailable,
-         mastodon_unavailable
-       )
-       VALUES ($1, $2, $3, $4, false, false)
+      `INSERT INTO network.nodes (twitter_id, bluesky_unavailable, mastodon_unavailable)
+       VALUES ($1, false, false)
        ON CONFLICT (twitter_id) DO UPDATE SET
-         mastodon_id = EXCLUDED.mastodon_id,
-         mastodon_username = EXCLUDED.mastodon_username,
-         mastodon_instance = EXCLUDED.mastodon_instance,
          bluesky_unavailable = false,
          mastodon_unavailable = false`,
-      [mastodonNodeId.toString(), mastodonId, 'matchingfound', 'https://target.social']
+      [mastodonNodeId.toString()]
     )
 
     await pg.query(
@@ -212,6 +251,25 @@ describe('GET /api/migrate/matching_found', () => {
        ON CONFLICT (twitter_id) DO NOTHING`,
       [nonOnboardedTwitterId.toString()]
     )
+
+    blueskyTargetIdentityId = await insertIdentityForTarget(pg, blueskyNodeId.toString(), [
+      {
+        platform: 'bluesky',
+        platformAccountId: blueskyDid,
+        platformUsername: 'matching-found-target.bsky.social',
+      },
+    ])
+
+    mastodonTargetIdentityId = await insertIdentityForTarget(pg, mastodonNodeId.toString(), [
+      {
+        platform: 'mastodon',
+        platformAccountId: mastodonId,
+        platformUsername: 'matchingfound',
+        platformInstance: 'https://target.social',
+      },
+    ])
+
+    syncedTargetIdentityId = await insertIdentityForTarget(pg, syncedNodeId.toString(), [])
   })
 
   beforeEach(async () => {
@@ -228,22 +286,53 @@ describe('GET /api/migrate/matching_found', () => {
     await pg.query('DELETE FROM network.sources_targets WHERE source_id = $1', [parallelUserId])
     await pg.query('DELETE FROM network.sources_followers WHERE source_id = $1', [sourceBlueskyUserId])
     await pg.query('DELETE FROM network.sources_followers WHERE source_id = $1', [sourceMastodonUserId])
-    await pg.query('DELETE FROM public.twitter_bluesky_users WHERE id = $1', [parallelUserId])
-    await pg.query('DELETE FROM public.twitter_mastodon_users WHERE id = $1', [parallelUserId])
-    await pg.query('DELETE FROM public.twitter_bluesky_users WHERE id = $1', [sourceBlueskyUserId])
-    await pg.query('DELETE FROM public.twitter_mastodon_users WHERE id = $1', [sourceMastodonUserId])
+    await pg.query(
+      `DELETE FROM identity.platform_accounts pa
+       USING identity.identities i
+       WHERE pa.identity_id = i.id
+         AND i.app_user_id = ANY($1::uuid[])`,
+      [[parallelUserId, sourceBlueskyUserId, sourceMastodonUserId]]
+    )
+    await pg.query(
+      'DELETE FROM identity.identities WHERE app_user_id = ANY($1::uuid[])',
+      [[parallelUserId, sourceBlueskyUserId, sourceMastodonUserId]]
+    )
     await pg.query(
       `UPDATE network.nodes
-       SET bluesky_handle = $2,
-           mastodon_id = $3,
-           mastodon_username = $4,
-           mastodon_instance = $5,
-           bluesky_unavailable = false,
+       SET bluesky_unavailable = false,
            mastodon_unavailable = false
        WHERE twitter_id = $1`,
-      [mastodonNodeId.toString(), null, mastodonId, 'matchingfound', 'https://target.social']
+      [mastodonNodeId.toString()]
     )
     await pg.query('DELETE FROM network.nodes WHERE twitter_id = $1', [syncedNodeId.toString()])
+    await pg.query(
+      `DELETE FROM identity.platform_accounts
+       WHERE identity_id = $1
+         AND platform IN ('bluesky', 'mastodon')`,
+      [syncedTargetIdentityId]
+    )
+    await pg.query(
+      `UPDATE identity.platform_accounts
+       SET platform_account_id = $2,
+           platform_username = $3,
+           platform_instance = '',
+           updated_at = now(),
+           last_seen_at = now()
+       WHERE identity_id = $1
+         AND platform = 'bluesky'`,
+      [blueskyTargetIdentityId, blueskyDid, 'matching-found-target.bsky.social']
+    )
+    await pg.query(
+      `UPDATE identity.platform_accounts
+       SET platform_account_id = $2,
+           platform_username = $3,
+           platform_instance = $4,
+           updated_at = now(),
+           last_seen_at = now()
+       WHERE identity_id = $1
+         AND platform = 'mastodon'`,
+      [mastodonTargetIdentityId, mastodonId, 'matchingfound', 'https://target.social']
+    )
   })
 
   afterAll(async () => {
@@ -252,10 +341,17 @@ describe('GET /api/migrate/matching_found', () => {
       await pg.query('DELETE FROM network.sources_targets WHERE source_id = $1', [parallelUserId])
       await pg.query('DELETE FROM network.sources_followers WHERE source_id = $1', [sourceBlueskyUserId])
       await pg.query('DELETE FROM network.sources_followers WHERE source_id = $1', [sourceMastodonUserId])
-      await pg.query('DELETE FROM public.twitter_bluesky_users WHERE id = $1', [parallelUserId])
-      await pg.query('DELETE FROM public.twitter_mastodon_users WHERE id = $1', [parallelUserId])
-      await pg.query('DELETE FROM public.twitter_bluesky_users WHERE id = $1', [sourceBlueskyUserId])
-      await pg.query('DELETE FROM public.twitter_mastodon_users WHERE id = $1', [sourceMastodonUserId])
+      await pg.query(
+        `DELETE FROM identity.platform_accounts pa
+         USING identity.identities i
+         WHERE pa.identity_id = i.id
+           AND i.app_user_id = ANY($1::uuid[])`,
+        [[parallelUserId, sourceBlueskyUserId, sourceMastodonUserId]]
+      )
+      await pg.query(
+        'DELETE FROM identity.identities WHERE app_user_id = ANY($1::uuid[])',
+        [[parallelUserId, sourceBlueskyUserId, sourceMastodonUserId]]
+      )
       await pg.query('DELETE FROM network.sources WHERE id = $1', [sourceBlueskyUserId])
       await pg.query('DELETE FROM network.sources WHERE id = $1', [sourceMastodonUserId])
       await pg.query('DELETE FROM network.sources WHERE id = $1', [parallelUserId])
@@ -265,6 +361,8 @@ describe('GET /api/migrate/matching_found', () => {
       await pg.query('DELETE FROM "next-auth".users WHERE id = $1', [nonOnboardedUserId])
       await pg.query('DELETE FROM "next-auth".users WHERE id = $1', [parallelUserId])
       await pg.query('DELETE FROM "next-auth".users WHERE id = $1', [testUserId])
+      await pg.query('DELETE FROM identity.platform_accounts WHERE identity_id = ANY($1::uuid[])', [[blueskyTargetIdentityId, mastodonTargetIdentityId, syncedTargetIdentityId]])
+      await pg.query('DELETE FROM identity.identities WHERE id = ANY($1::uuid[])', [[blueskyTargetIdentityId, mastodonTargetIdentityId, syncedTargetIdentityId]])
       await pg.query('DELETE FROM network.nodes WHERE twitter_id = ANY($1::bigint[])', [[blueskyNodeId.toString(), mastodonNodeId.toString(), syncedNodeId.toString(), nonOnboardedTwitterId.toString()]])
     } catch {
       // ignore cleanup failures
@@ -402,15 +500,27 @@ describe('GET /api/migrate/matching_found', () => {
     ])
 
     await pg.query(
-      `UPDATE network.nodes
-       SET bluesky_handle = $2,
-           mastodon_id = $3,
-           mastodon_username = $4,
-           mastodon_instance = $5,
-           bluesky_unavailable = false,
-           mastodon_unavailable = false
-       WHERE twitter_id = $1`,
-      [mastodonNodeId.toString(), 'refreshed-target.bsky.social', `${mastodonId}-updated`, 'matchingfound-updated', 'https://refreshed.social']
+      `INSERT INTO identity.platform_accounts (
+         identity_id, platform, platform_account_id, platform_username, platform_instance, created_at, updated_at, last_seen_at
+       )
+       VALUES ($1, 'bluesky', $2, $3, '', now(), now(), now())
+       ON CONFLICT (platform, platform_account_id, platform_instance) DO UPDATE SET
+         platform_username = EXCLUDED.platform_username,
+         updated_at = now(),
+         last_seen_at = now()`,
+      [mastodonTargetIdentityId, `did:plc:${randomUUID().replace(/-/g, '')}`, 'refreshed-target.bsky.social']
+    )
+
+    await pg.query(
+      `UPDATE identity.platform_accounts
+       SET platform_account_id = $2,
+           platform_username = $3,
+           platform_instance = $4,
+           updated_at = now(),
+           last_seen_at = now()
+       WHERE identity_id = $1
+         AND platform = 'mastodon'`,
+      [mastodonTargetIdentityId, `${mastodonId}-updated`, 'matchingfound-updated', 'https://refreshed.social']
     )
 
     response = asMockRouteResponse(await GET({} as any))
@@ -433,8 +543,10 @@ describe('GET /api/migrate/matching_found', () => {
     ])
   })
 
-  it('surfaces updates propagated from twitter_bluesky_users and twitter_mastodon_users through network.nodes', async () => {
+  it('surfaces updates exposed through identity.platform_accounts', async () => {
     const { GET } = await import('@/app/api/migrate/matching_found/route')
+
+    const syncedMastodonId = `synced-${randomUUID().slice(0, 8)}`
 
     await pg.query(
       `INSERT INTO network.nodes (twitter_id, bluesky_unavailable, mastodon_unavailable)
@@ -455,48 +567,18 @@ describe('GET /api/migrate/matching_found', () => {
 
     expect(body.matches.following).toEqual([])
 
-    const syncedMastodonId = `synced-${randomUUID().slice(0, 8)}`
-
     await pg.query(
-      `INSERT INTO public.twitter_bluesky_users (
-         id, name, email, twitter_id, twitter_username, bluesky_id, bluesky_username
+      `INSERT INTO identity.platform_accounts (
+         identity_id, platform, platform_account_id, platform_username, platform_instance, created_at, updated_at, last_seen_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (id) DO UPDATE SET
-         twitter_id = EXCLUDED.twitter_id,
-         twitter_username = EXCLUDED.twitter_username,
-         bluesky_id = EXCLUDED.bluesky_id,
-         bluesky_username = EXCLUDED.bluesky_username,
-         updated_at = now()`,
+       VALUES
+         ($1, 'bluesky', $2, $3, '', now(), now(), now()),
+         ($1, 'mastodon', $4, $5, $6, now(), now(), now())
+       ON CONFLICT (platform, platform_account_id, platform_instance) DO NOTHING`,
       [
-        parallelUserId,
-        'parallel-source',
-        `parallel-${parallelUserId}@example.com`,
-        syncedNodeId.toString(),
-        'parallel-twitter',
-        `did:plc:${randomUUID().replace(/-/g, '')}`,
+        syncedTargetIdentityId,
+        syncedBlueskyDid,
         'synced-target.bsky.social',
-      ]
-    )
-
-    await pg.query(
-      `INSERT INTO public.twitter_mastodon_users (
-         id, name, email, twitter_id, twitter_username, mastodon_id, mastodon_username, mastodon_instance
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (id) DO UPDATE SET
-         twitter_id = EXCLUDED.twitter_id,
-         twitter_username = EXCLUDED.twitter_username,
-         mastodon_id = EXCLUDED.mastodon_id,
-         mastodon_username = EXCLUDED.mastodon_username,
-         mastodon_instance = EXCLUDED.mastodon_instance,
-         updated_at = now()`,
-      [
-        parallelUserId,
-        'parallel-source',
-        `parallel-${parallelUserId}@example.com`,
-        syncedNodeId.toString(),
-        'parallel-twitter',
         syncedMastodonId,
         'syncedmasto',
         'https://synced.social',
@@ -504,19 +586,30 @@ describe('GET /api/migrate/matching_found', () => {
     )
 
     const nodeResult = await pg.query(
-      `SELECT twitter_id::text as twitter_id, bluesky_handle, mastodon_id, mastodon_username, mastodon_instance
-       FROM network.nodes
-       WHERE twitter_id = $1`,
-      [syncedNodeId.toString()]
+      `SELECT platform, platform_account_id, platform_username, platform_instance
+       FROM identity.platform_accounts
+       WHERE identity_id = $1
+         AND platform IN ('bluesky', 'mastodon')
+       ORDER BY platform`,
+      [syncedTargetIdentityId]
     )
 
-    expect(nodeResult.rows[0]).toMatchObject({
-      twitter_id: syncedNodeId.toString(),
-      bluesky_handle: 'synced-target.bsky.social',
-      mastodon_id: syncedMastodonId,
-      mastodon_username: 'syncedmasto',
-      mastodon_instance: 'https://synced.social',
-    })
+    expect(nodeResult.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: 'bluesky',
+          platform_account_id: syncedBlueskyDid,
+          platform_username: 'synced-target.bsky.social',
+          platform_instance: '',
+        }),
+        expect.objectContaining({
+          platform: 'mastodon',
+          platform_account_id: syncedMastodonId,
+          platform_username: 'syncedmasto',
+          platform_instance: 'https://synced.social',
+        }),
+      ])
+    )
 
     response = asMockRouteResponse(await GET({} as any))
     body = response.data
@@ -557,50 +650,82 @@ describe('GET /api/migrate/matching_found', () => {
     )
 
     await pg.query(
-      `INSERT INTO public.twitter_bluesky_users (
-         id, name, email, twitter_id, twitter_username, bluesky_id, bluesky_username
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (id) DO UPDATE SET
-         twitter_id = EXCLUDED.twitter_id,
-         twitter_username = EXCLUDED.twitter_username,
-         bluesky_id = EXCLUDED.bluesky_id,
-         bluesky_username = EXCLUDED.bluesky_username,
-         updated_at = now()`,
+      `INSERT INTO identity.identities (app_user_id, created_at, updated_at, last_seen_at)
+       VALUES ($1, now(), now(), now())
+       ON CONFLICT (app_user_id) DO UPDATE SET
+         updated_at = now(),
+         last_seen_at = now()`,
       [
         sourceBlueskyUserId,
-        'source-bluesky-user',
-        `source-bluesky-${sourceBlueskyUserId}@example.com`,
-        sourceBlueskyTwitterId.toString(),
-        'source-bluesky-twitter',
-        `did:plc:${randomUUID().replace(/-/g, '')}`,
-        'source-match.bsky.social',
       ]
+    )
+
+    await pg.query(
+      `INSERT INTO identity.platform_accounts (
+         identity_id, platform, platform_account_id, platform_username, platform_instance, created_at, updated_at, last_seen_at
+       )
+       SELECT i.id, 'twitter', $2, 'source-bluesky-twitter', '', now(), now(), now()
+       FROM identity.identities i
+       WHERE i.app_user_id = $1
+       ON CONFLICT (platform, platform_account_id, platform_instance) DO UPDATE SET
+         platform_username = EXCLUDED.platform_username,
+         updated_at = now(),
+         last_seen_at = now()`,
+      [sourceBlueskyUserId, sourceBlueskyTwitterId.toString()]
+    )
+
+    await pg.query(
+      `INSERT INTO identity.platform_accounts (
+         identity_id, platform, platform_account_id, platform_username, platform_instance, created_at, updated_at, last_seen_at
+       )
+       SELECT i.id, 'bluesky', $2, $3, '', now(), now(), now()
+       FROM identity.identities i
+       WHERE i.app_user_id = $1
+       ON CONFLICT (platform, platform_account_id, platform_instance) DO UPDATE SET
+         platform_username = EXCLUDED.platform_username,
+         updated_at = now(),
+         last_seen_at = now()`,
+      [sourceBlueskyUserId, `did:plc:${randomUUID().replace(/-/g, '')}`, 'source-match.bsky.social']
     )
 
     const nonOnboardedMastodonId = `source-masto-${randomUUID().slice(0, 8)}`
     await pg.query(
-      `INSERT INTO public.twitter_mastodon_users (
-         id, name, email, twitter_id, twitter_username, mastodon_id, mastodon_username, mastodon_instance
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (id) DO UPDATE SET
-         twitter_id = EXCLUDED.twitter_id,
-         twitter_username = EXCLUDED.twitter_username,
-         mastodon_id = EXCLUDED.mastodon_id,
-         mastodon_username = EXCLUDED.mastodon_username,
-         mastodon_instance = EXCLUDED.mastodon_instance,
-         updated_at = now()`,
+      `INSERT INTO identity.identities (app_user_id, created_at, updated_at, last_seen_at)
+       VALUES ($1, now(), now(), now())
+       ON CONFLICT (app_user_id) DO UPDATE SET
+         updated_at = now(),
+         last_seen_at = now()`,
       [
         sourceMastodonUserId,
-        'source-mastodon-user',
-        `source-masto-${sourceMastodonUserId}@example.com`,
-        sourceMastodonTwitterId.toString(),
-        'source-mastodon-twitter',
-        nonOnboardedMastodonId,
-        'sourcemasto',
-        'https://source.social',
       ]
+    )
+
+    await pg.query(
+      `INSERT INTO identity.platform_accounts (
+         identity_id, platform, platform_account_id, platform_username, platform_instance, created_at, updated_at, last_seen_at
+       )
+       SELECT i.id, 'twitter', $2, 'source-mastodon-twitter', '', now(), now(), now()
+       FROM identity.identities i
+       WHERE i.app_user_id = $1
+       ON CONFLICT (platform, platform_account_id, platform_instance) DO UPDATE SET
+         platform_username = EXCLUDED.platform_username,
+         updated_at = now(),
+         last_seen_at = now()`,
+      [sourceMastodonUserId, sourceMastodonTwitterId.toString()]
+    )
+
+    await pg.query(
+      `INSERT INTO identity.platform_accounts (
+         identity_id, platform, platform_account_id, platform_username, platform_instance, created_at, updated_at, last_seen_at
+       )
+       SELECT i.id, 'mastodon', $2, $3, $4, now(), now(), now()
+       FROM identity.identities i
+       WHERE i.app_user_id = $1
+       ON CONFLICT (platform, platform_account_id, platform_instance) DO UPDATE SET
+         platform_username = EXCLUDED.platform_username,
+         updated_at = now(),
+         last_seen_at = now()`,
+      [sourceMastodonUserId, nonOnboardedMastodonId, 'sourcemasto', 'https://source.social']
     )
 
     const response = asMockRouteResponse(await GET({} as any))

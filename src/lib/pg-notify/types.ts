@@ -76,3 +76,13 @@ export interface SyncRedisMappingPayload {
   };
   timestamp?: number;
 }
+
+export interface NetworkSyncJobNotifyPayload {
+  job_id: number;
+  user_id: string;
+  provider: 'bluesky' | 'mastodon';
+  scope: 'followers' | 'followings' | 'full_sync' | string;
+  status: 'pending' | 'retrying' | string;
+  dedupe_key?: string;
+  timestamp?: number;
+}

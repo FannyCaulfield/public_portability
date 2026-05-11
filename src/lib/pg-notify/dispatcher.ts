@@ -9,6 +9,7 @@ import type {
   NetworkSyncJobsPayload,
   SyncRedisMappingPayload,
   UserStatsCacheInvalidationPayload,
+  NetworkSyncJobNotifyPayload,
 } from './types';
 import { handleCacheInvalidation, handleConsentChange } from './handlers/cache-invalidation';
 import { handleConsentProcessing } from './handlers/consent-processing';

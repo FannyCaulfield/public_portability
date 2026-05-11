@@ -14,6 +14,12 @@ export interface User {
     mastodon_username?: string;
     mastodon_image?: string;
     mastodon_instance?: string;
+    youtube_id?: string;
+    youtube_username?: string;
+    youtube_image?: string;
+    linkedin_id?: string;
+    linkedin_username?: string;
+    linkedin_image?: string;
     email?: string;
     email_verified?: Date;
     image?: string;
@@ -39,7 +45,7 @@ export type UserUpdate = Partial<Omit<User, 'id' | 'created_at' | 'updated_at'>>
 // Types spécifiques pour différents types de mises à jour
 export interface NewsletterUpdate extends Pick<UserUpdate, 'email' | 'hqx_newsletter' | 'oep_accepted' | 'research_accepted' | 'have_seen_newsletter' | 'personalized_support'> {}
 
-export interface ShareUpdate extends Pick<UserUpdate, 'twitter_id' | 'twitter_username' | 'twitter_image' | 'bluesky_id' | 'bluesky_username' | 'bluesky_image' | 'mastodon_id' | 'mastodon_username' | 'mastodon_image' | 'mastodon_instance'> {}
+export interface ShareUpdate extends Pick<UserUpdate, 'twitter_id' | 'twitter_username' | 'twitter_image' | 'bluesky_id' | 'bluesky_username' | 'bluesky_image' | 'mastodon_id' | 'mastodon_username' | 'mastodon_image' | 'mastodon_instance' | 'youtube_id' | 'youtube_username' | 'youtube_image' | 'linkedin_id' | 'linkedin_username' | 'linkedin_image'> {}
 
 // Type pour les événements de partage
 export interface ShareEvent {

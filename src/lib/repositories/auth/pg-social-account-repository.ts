@@ -2,7 +2,7 @@ import { queryNextAuth } from '../../database'
 import type { DBSocialAccount } from '../../types/database'
 import logger from '../../log_utils'
 
-type SocialProvider = 'twitter' | 'bluesky' | 'mastodon' | 'linkedin' | 'facebook'
+type SocialProvider = 'twitter' | 'bluesky' | 'mastodon' | 'linkedin' | 'youtube' | 'facebook'
 
 interface UpsertSocialAccountInput {
   user_id: string
