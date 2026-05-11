@@ -183,7 +183,7 @@ export const pgUserRepository = {
   async getUserActiveConsents(userId: string): Promise<Record<string, boolean>> {
     try {
       const result = await queryNextAuth<{ consent_type: string; consent_value: boolean }>(
-        'SELECT consent_type, consent_value FROM newsletter_consents WHERE user_id = $1 AND is_active = true',
+        'SELECT consent_type, consent_value FROM consent.newsletter_consents WHERE user_id = $1 AND is_active = true',
         [userId]
       )
 

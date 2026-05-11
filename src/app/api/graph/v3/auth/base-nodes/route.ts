@@ -91,7 +91,7 @@ async function authBaseNodesHandler(
                0 as priority
         FROM postgres_db.public.graph_nodes_${GRAPH_VERSION} g
         INNER JOIN postgres_db.public.users_with_name_consent u ON g.id = u.twitter_id
-        LEFT JOIN postgres_db.consent.public_accounts pa
+        LEFT JOIN postgres_db.public.public_accounts pa
           ON pa.twitter_id = u.twitter_id AND u.is_public_account = true
         WHERE g.community != 8
       ),
@@ -112,17 +112,21 @@ async function authBaseNodesHandler(
                1 as priority
         FROM postgres_db.public.graph_nodes_${GRAPH_VERSION} g
         ${hasOnboarded
-          ? `INNER JOIN postgres_db.public.sources_targets st
+          ? `INNER JOIN postgres_db.network.sources_targets st
                ON st.node_id = g.id
               AND st.source_id = '${userId.replace(/'/g, "''")}'::uuid`
           : (twitterId
             ? `INNER JOIN (
-                 SELECT DISTINCT COALESCE(tbu.twitter_id, tmu.twitter_id) AS twitter_id
+                 SELECT DISTINCT CAST(twitter_pa.platform_account_id AS BIGINT) AS twitter_id
                  FROM postgres_db.public.sources_followers sf
-                 LEFT JOIN postgres_db.public.twitter_bluesky_users tbu ON tbu.id = sf.source_id
-                 LEFT JOIN postgres_db.public.twitter_mastodon_users tmu ON tmu.id = sf.source_id
+                 INNER JOIN postgres_db.identity.identities i
+                   ON i.app_user_id = sf.source_id
+                 INNER JOIN postgres_db.identity.platform_accounts twitter_pa
+                   ON twitter_pa.identity_id = i.id
+                  AND twitter_pa.platform = 'twitter'
+                  AND twitter_pa.platform_instance = ''
                  WHERE sf.node_id = ${twitterIdSql}
-                   AND (tbu.twitter_id IS NOT NULL OR tmu.twitter_id IS NOT NULL)
+                   AND twitter_pa.platform_account_id IS NOT NULL
                ) s ON g.id = s.twitter_id`
             : `INNER JOIN (SELECT NULL::bigint AS twitter_id) s ON FALSE`)
         }
@@ -138,14 +142,15 @@ async function authBaseNodesHandler(
                1 as priority
         FROM postgres_db.public.graph_nodes_${GRAPH_VERSION} g
         ${twitterId
-          ? `INNER JOIN postgres_db."next-auth".users u
-               ON u.twitter_id = g.id
-             INNER JOIN postgres_db.public.sources_targets st
-               ON st.source_id = u.id
+          ? `INNER JOIN postgres_db."next-auth".social_accounts sa
+               ON sa.provider = 'twitter'
+              AND sa.provider_account_id = CAST(g.id AS VARCHAR)
+             INNER JOIN postgres_db.network.sources_targets st
+               ON st.source_id = sa.user_id
               AND st.node_id = ${twitterIdSql}::bigint
               AND (st.has_follow_bluesky = TRUE OR st.has_follow_mastodon = TRUE)`
-          : `INNER JOIN (SELECT NULL::bigint AS id) u ON FALSE
-             INNER JOIN postgres_db.public.sources_targets st ON FALSE`
+          : `INNER JOIN (SELECT NULL::varchar AS provider_account_id, NULL::uuid AS user_id) sa ON FALSE
+             INNER JOIN postgres_db.network.sources_targets st ON FALSE`
         }
         WHERE g.community != 8
           AND ${twitterId ? `g.id != ${twitterIdSql}` : 'TRUE'}

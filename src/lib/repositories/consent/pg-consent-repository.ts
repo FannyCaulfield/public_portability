@@ -27,7 +27,7 @@ export const pgConsentRepository = {
     try {
       const result = await queryConsent<{ consent_type: string; consent_value: boolean }>(
         `SELECT consent_type, consent_value 
-         FROM newsletter_consents 
+         FROM consent.newsletter_consents 
          WHERE user_id = $1 AND is_active = true`,
         [userId]
       )
@@ -47,7 +47,7 @@ export const pgConsentRepository = {
   async getConsentHistory(userId: string, consentType?: string): Promise<ConsentHistoryItem[]> {
     try {
       let query = `SELECT consent_type, consent_value, consent_timestamp, is_active 
-                   FROM newsletter_consents 
+                   FROM consent.newsletter_consents 
                    WHERE user_id = $1`
       const params: any[] = [userId]
 
@@ -89,7 +89,7 @@ export const pgConsentRepository = {
 
       await transactionConsent(async (client) => {
         await client.query(
-          `UPDATE newsletter_consents
+          `UPDATE consent.newsletter_consents
            SET is_active = false, updated_at = CURRENT_TIMESTAMP
            WHERE user_id = $1 AND consent_type = $2 AND is_active = true`,
           [userId, type]
@@ -97,7 +97,7 @@ export const pgConsentRepository = {
 
         try {
           await client.query(
-            `INSERT INTO newsletter_consents(
+            `INSERT INTO consent.newsletter_consents(
               user_id, consent_type, consent_value, ip_address, user_agent, is_active, ip_address_full, consent_timestamp, created_at, updated_at
             )
             VALUES ($1, $2, $3, $4, $5, true, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -141,7 +141,7 @@ export const pgConsentRepository = {
   async insertConsent(consent: NewsletterConsent): Promise<NewsletterConsent> {
     try {
       const result = await queryConsent<NewsletterConsent>(
-        `INSERT INTO newsletter_consents(
+        `INSERT INTO consent.newsletter_consents(
           user_id, consent_type, consent_value, ip_address, user_agent, is_active, ip_address_full, consent_timestamp, created_at, updated_at
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -172,7 +172,7 @@ export const pgConsentRepository = {
   async upsertConsent(consent: NewsletterConsent): Promise<NewsletterConsent> {
     try {
       const result = await queryConsent<NewsletterConsent>(
-        `INSERT INTO newsletter_consents(
+        `INSERT INTO consent.newsletter_consents(
           user_id, consent_type, consent_value, ip_address, user_agent, is_active, ip_address_full, consent_timestamp, created_at, updated_at
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -210,7 +210,7 @@ export const pgConsentRepository = {
   async getConsent(userId: string, consentType: string): Promise<NewsletterConsent | null> {
     try {
       const result = await queryConsent<NewsletterConsent>(
-        `SELECT * FROM newsletter_consents 
+        `SELECT * FROM consent.newsletter_consents 
          WHERE user_id = $1 AND consent_type = $2 AND is_active = true`,
         [userId, consentType]
       )
@@ -224,7 +224,7 @@ export const pgConsentRepository = {
 
   async deleteUserConsents(userId: string): Promise<void> {
     try {
-      await queryConsent(`DELETE FROM newsletter_consents WHERE user_id = $1`, [userId])
+      await queryConsent(`DELETE FROM consent.newsletter_consents WHERE user_id = $1`, [userId])
     } catch (error) {
       logger.logError('Repository', 'pgConsentRepository.deleteUserConsents', 'Error deleting user consents', userId, { error })
       throw error
@@ -234,7 +234,7 @@ export const pgConsentRepository = {
   async deleteConsent(userId: string, consentType: string): Promise<void> {
     try {
       await queryConsent(
-        `DELETE FROM newsletter_consents WHERE user_id = $1 AND consent_type = $2`,
+        `DELETE FROM consent.newsletter_consents WHERE user_id = $1 AND consent_type = $2`,
         [userId, consentType]
       )
     } catch (error) {
