@@ -1,7 +1,0 @@
-{
-    "testDm": "Esta é uma mensagem de teste automática da OpenPortability para verificar se podemos contatá-lo(a) via DM. Nenhuma ação é necessária.",
-    "recoNewsletter": {
-      "singular": "Olá! Há ${count} pessoa que você seguia no Twitter e que agora está no ${platformName}! Visite openportability.org para encontrá-la 🚀",
-      "plural": "Olá! Há ${count} pessoas que você seguia no Twitter e que agora estão no ${platformName}! Visite openportability.org para encontrá-las 🚀"
-    }
-  }

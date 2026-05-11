@@ -1,3 +1,0 @@
-atproto==0.0.59
-python-dotenv==1.0.1
-Mastodon.py==1.8.1
