@@ -91,7 +91,7 @@ async function authBaseNodesHandler(
                0 as priority
         FROM postgres_db.public.graph_nodes_${GRAPH_VERSION} g
         INNER JOIN postgres_db.public.users_with_name_consent u ON g.id = u.twitter_id
-        LEFT JOIN postgres_db.public.public_accounts pa
+        LEFT JOIN postgres_db.consent.public_accounts pa
           ON pa.twitter_id = u.twitter_id AND u.is_public_account = true
         WHERE g.community != 8
       ),

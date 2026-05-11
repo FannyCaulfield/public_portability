@@ -95,13 +95,13 @@ export default function LoginButtons({ onLoadingChange, onError, userId }: Login
             onClick={() => handleServiceSelect('mastodon')}
           />
 
-          <FediverseLoginButton
+          {/* <FediverseLoginButton
             onLoadingChange={onLoadingChange}
             className={quantico.className}
             isSelected={activeService === 'fediverse'}
             onClick={() => handleServiceSelect('fediverse')}
             userId={userId}
-          />
+          /> */}
         </motion.div>
 
         {/* Expanded forms */}
@@ -144,7 +144,7 @@ export default function LoginButtons({ onLoadingChange, onError, userId }: Login
             </motion.div>
           )}
 
-          {activeService === 'fediverse' && (
+          {/* {activeService === 'fediverse' && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
@@ -161,7 +161,7 @@ export default function LoginButtons({ onLoadingChange, onError, userId }: Login
                 />
               </div>
             </motion.div>
-          )}
+          )} */}
         </AnimatePresence>
       </div>
     </div>

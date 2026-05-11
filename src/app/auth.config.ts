@@ -52,7 +52,7 @@ function getEnqueuedNetworkProvider(provider: string): NetworkProvider | null {
     return 'mastodon'
   }
 
-  if (provider === 'bluesky' || provider === 'mastodon' || provider === 'youtube') {
+  if (provider === 'bluesky' || provider === 'mastodon') {
     return provider
   }
 

@@ -521,7 +521,7 @@ export const pgGraphNodesRepository = {
             gn.y,
             gn.community
           FROM consent.users_with_name_consent uwnc
-          LEFT JOIN public.public_accounts pa
+          LEFT JOIN consent.public_accounts pa
             ON pa.twitter_id = uwnc.twitter_id
             AND uwnc.is_public_account = true
           INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = uwnc.twitter_id
@@ -599,7 +599,7 @@ export const pgGraphNodesRepository = {
               ELSE NULL
             END as mastodon_handle
           FROM consent.users_with_name_consent uwnc
-          LEFT JOIN public.public_accounts pa
+          LEFT JOIN consent.public_accounts pa
             ON pa.twitter_id = uwnc.twitter_id
             AND uwnc.is_public_account = true
           INNER JOIN graph.graph_nodes_03_11_25 gn ON gn.id = uwnc.twitter_id
